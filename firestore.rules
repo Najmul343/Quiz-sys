@@ -1,0 +1,141 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Hardened Global Helpers ---
+    function isSignedIn() { return request.auth != null; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    // Auth Data Helper 
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    function isSuperAdmin() {
+      return isSignedIn() && (getUserData().role == 'superadmin' || request.auth.token.email == 'thenajmulhuda@gmail.com');
+    }
+    
+    function isPrincipal(collegeId) {
+      return isSignedIn() && getUserData().role == 'principal' && getUserData().collegeId == collegeId;
+    }
+    
+    function isTeacher() {
+      return isSignedIn() && getUserData().role == 'teacher';
+    }
+
+    function isCollegeMember(collegeId) {
+       return isSignedIn() && getUserData().collegeId == collegeId;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // --- Health Check ---
+    match /test/connection {
+      allow read: if true;
+    }
+
+    // --- College Rules ---
+    match /colleges/{collegeId} {
+      function isValidCollege(data) {
+        return data.name is string && data.name.size() > 0 &&
+               data.createdAt is timestamp;
+      }
+      allow read: if isSignedIn();
+      allow create: if isSuperAdmin() && isValidCollege(incoming());
+      allow update: if (isSuperAdmin() || isPrincipal(collegeId)) && isValidCollege(incoming());
+      allow delete: if isSuperAdmin();
+    }
+
+    // --- User Rules ---
+    match /users/{userId} {
+      function isValidUser(data) {
+        return data.email is string && data.email.size() > 0 &&
+               data.role in ['superadmin', 'principal', 'teacher', 'student'] &&
+               data.createdAt is timestamp;
+      }
+
+      allow get: if isSignedIn() && (isOwner(userId) || isSuperAdmin() || (isPrincipal(getUserData().collegeId) && existing().collegeId == getUserData().collegeId));
+      allow list: if isSuperAdmin() || (isSignedIn() && ((resource.data.collegeId != null && isPrincipal(resource.data.collegeId)) || isTeacher()));
+      
+      allow create: if (isSignedIn() && (isOwner(userId) || isSuperAdmin() || isPrincipal(incoming().collegeId) || isTeacher())) && 
+                       isValidUser(incoming());
+      
+      allow update: if isSignedIn() && (isOwner(userId) || isSuperAdmin() || isPrincipal(existing().collegeId)) && (
+        isSuperAdmin() || 
+        (isPrincipal(existing().collegeId) && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'classId', 'status'])) ||
+        (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'trade', 'rollNo', 'imageUrl']) && incoming().role == existing().role)
+      );
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // --- Question Rules ---
+    match /questions/{questionId} {
+      function isValidQuestion(data) {
+        return data.text is string && data.text.size() > 0 &&
+               data.options is map &&
+               data.answer is string &&
+               data.createdBy is string &&
+               data.createdAt is timestamp;
+      }
+
+      allow read: if isSignedIn();
+      allow create: if (isTeacher() || isPrincipal(incoming().collegeId)) && isValidQuestion(incoming());
+      allow update: if (isSuperAdmin() || (isSignedIn() && (existing().createdBy == request.auth.uid || isPrincipal(existing().collegeId)))) && isValidQuestion(incoming());
+      allow delete: if isSuperAdmin() || (isSignedIn() && (existing().createdBy == request.auth.uid || isPrincipal(existing().collegeId)));
+    }
+
+    // --- Test Rules ---
+    match /tests/{testId} {
+      function isValidTest(data) {
+        return data.title is string && data.title.size() > 0 &&
+               data.teacherId is string &&
+               data.questionIds is list &&
+               data.createdAt is timestamp;
+      }
+
+      allow read: if isSignedIn();
+      allow create: if isTeacher() && isValidTest(incoming()) && incoming().teacherId == request.auth.uid;
+      allow update: if (isSuperAdmin() || isPrincipal(existing().collegeId) || (isTeacher() && existing().teacherId == request.auth.uid)) && isValidTest(incoming());
+      allow delete: if isSuperAdmin() || isPrincipal(existing().collegeId) || (isTeacher() && existing().teacherId == request.auth.uid);
+    }
+
+    // --- Submission Rules ---
+    match /submissions/{subId} {
+      function isValidSubmission(data) {
+        return data.testId is string &&
+               data.answers is map &&
+               data.score is int &&
+               data.submittedAt is timestamp;
+      }
+
+      allow get: if isSignedIn() && (isOwner(existing().studentId) || isTeacher() || isSuperAdmin() || isPrincipal(existing().collegeId));
+      allow list: if isSuperAdmin() || isTeacher() || (isSignedIn() && (isPrincipal(resource.data.collegeId) || resource.data.studentId == request.auth.uid));
+      
+      allow create: if isSignedIn() && isValidSubmission(incoming()) && (incoming().studentId == request.auth.uid || incoming().studentId == 'anonymous');
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // --- Class Rules ---
+    match /classes/{classId} {
+      function isValidClass(data) {
+        return data.name is string && data.name.size() > 0 &&
+               data.teacherId is string &&
+               data.collegeId is string &&
+               data.createdAt is timestamp;
+      }
+      allow read: if isSignedIn();
+      allow create: if (isPrincipal(incoming().collegeId) || isSuperAdmin()) && isValidClass(incoming());
+      allow update: if (isPrincipal(existing().collegeId) || isSuperAdmin()) && isValidClass(incoming());
+      allow delete: if (isPrincipal(existing().collegeId) || isSuperAdmin());
+    }
+  }
+}

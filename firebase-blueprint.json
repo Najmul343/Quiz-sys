@@ -1,0 +1,106 @@
+{
+  "entities": {
+    "College": {
+      "title": "College",
+      "description": "An educational institution registered on the platform.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "location": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "createdAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "A user of the platform (Teacher, Student, Principal, SuperAdmin).",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["superadmin", "principal", "teacher", "student"] },
+        "collegeId": { "type": "string" },
+        "rollNo": { "type": "string" },
+        "trade": { "type": "string" },
+        "addedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "role"]
+    },
+    "Question": {
+      "title": "Question",
+      "description": "A multiple-choice question.",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "options": { "type": "object" },
+        "answer": { "type": "string" },
+        "subject": { "type": "string" },
+        "chapter": { "type": "string" },
+        "difficulty": { "type": "string", "enum": ["easy", "medium", "hard"] },
+        "explanation": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["text", "options", "answer", "createdBy"]
+    },
+    "Test": {
+      "title": "Test",
+      "description": "An assessment created by a teacher.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "collegeId": { "type": "string" },
+        "questionIds": { "type": "array", "items": { "type": "string" } },
+        "duration": { "type": "number" },
+        "passingMarks": { "type": "number" },
+        "settings": { "type": "object" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "isPractice": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "teacherId", "questionIds"]
+    },
+    "Submission": {
+      "title": "Submission",
+      "description": "A student's response to a test.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "testId": { "type": "string" },
+        "collegeId": { "type": "string" },
+        "answers": { "type": "object" },
+        "score": { "type": "number" },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["PASS", "FAIL"] },
+        "violations": { "type": "object" },
+        "submittedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentId", "testId", "score"]
+    },
+    "Class": {
+      "title": "Class",
+      "description": "A student group assigned to a teacher.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "collegeId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "teacherId", "collegeId"]
+    }
+  },
+  "firestore": {
+    "/colleges/{collegeId}": { "schema": "College", "description": "Global college registry" },
+    "/users/{userId}": { "schema": "User", "description": "Multi-tenant user profiles" },
+    "/questions/{questionId}": { "schema": "Question", "description": "Global question bank" },
+    "/tests/{testId}": { "schema": "Test", "description": "Deployment configurations" },
+    "/submissions/{submissionId}": { "schema": "Submission", "description": "Detailed result logs" },
+    "/classes/{classId}": { "schema": "Class", "description": "Institutional classroom mapping" }
+  }
+}
