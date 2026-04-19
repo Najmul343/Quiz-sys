@@ -21,6 +21,8 @@ import AdminDashboard from './pages/AdminDashboard';
 import PrincipalDashboard from './pages/PrincipalDashboard';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 
+import { cn } from './lib/utils';
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<string | null>(null);
@@ -63,7 +65,14 @@ export default function App() {
 
   return (
     <Router>
-      <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      <div className={cn(
+        "min-h-screen transition-colors duration-500",
+        role === 'student' && "theme-student",
+        role === 'teacher' && "theme-teacher",
+        role === 'principal' && "theme-principal",
+        role === 'superadmin' && "theme-super-admin",
+        !role && "bg-slate-50"
+      )}>
         <Routes>
           <Route path="/login" element={!user ? <LoginPage /> : <Navigate to="/" />} />
           

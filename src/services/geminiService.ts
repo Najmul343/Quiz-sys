@@ -2,11 +2,16 @@ import { GoogleGenAI } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-export async function generateQuestionsAI(subject: string, topic: string, difficulty: string, count: number) {
+export async function generateQuestionsAI(subject: string, topic: string, difficulty: string, count: number, contextText?: string) {
   try {
-    const prompt = `Generate ${count} MCQ questions about ${subject}.
-    Topic details: ${topic}
+    const prompt = `Generate ${count} MCQ questions based on the following context.
+    Subject: ${subject}
+    Topic: ${topic}
     Difficulty: ${difficulty}
+    
+    Context Information:
+    ${contextText || 'Using general knowledge about ' + topic}
+
     Return ONLY a JSON array in this format:
     [
       {

@@ -33,28 +33,78 @@ export default function QuizSession() {
   const [studentName, setStudentName] = useState("");
   const [needsName, setNeedsName] = useState(false);
 
+  const [studentRollNo, setStudentRollNo] = useState("N/A");
+
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (loading || isSubmitted || (test && test.isPractice)) return;
+    
+    const timer = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          handleFinalSubmit();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    
+    return () => clearInterval(timer);
+  }, [loading, isSubmitted, test]);
+
+  useEffect(() => {
     fetchTestData();
+    fetchUserIdentity();
     
     // Anti-cheat: Tab Switching Detection
     const handleVisibilityChange = () => {
-      if (document.hidden && !isSubmitted) {
+      if (document.hidden && !isSubmitted && test && !test.isPractice) {
         setViolations(prev => ({ ...prev, tabSwitches: prev.tabSwitches + 1 }));
         setShowWarning(true);
       }
     };
 
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }, []);
 
+  const fetchUserIdentity = async () => {
+    if (!auth.currentUser) return;
+    try {
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+      if (userDoc.exists()) {
+        const data = userDoc.data();
+        // FORCE officialName if exists, else displayName
+        setStudentName(data.officialName || data.displayName || auth.currentUser.displayName || "");
+        setStudentRollNo(data.rollNo || "N/A");
+      }
+    } catch (e) {
+      console.error("Identity fetch error:", e);
+    }
+  };
+
   const enterFullscreen = () => {
-    if (containerRef.current?.requestFullscreen) {
-      containerRef.current.requestFullscreen().catch(e => console.error(e));
+    const element = document.documentElement;
+    const request = element.requestFullscreen || (element as any).webkitRequestFullscreen || (element as any).mozRequestFullScreen || (element as any).msRequestFullscreen;
+    
+    if (request) {
+      request.call(element).catch((err: any) => {
+        console.error(`Error attempting to enable fullscreen: ${err.message}`);
+        setIsFullscreen(true); // Forced bypass if error occurs but user intent was there
+      });
+    } else {
+      // Direct bypass for mobile browsers that don't support FS API (e.g. iOS Safari)
       setIsFullscreen(true);
     }
   };
@@ -73,6 +123,10 @@ export default function QuizSession() {
 
       if (testData.settings?.authRequired === false && !auth.currentUser) {
         setNeedsName(true);
+      }
+
+      if (testData.settings?.forceFullscreen && !testData.isPractice && !document.fullscreenElement) {
+        // Fullscreen check logic is handled in the render phase
       }
 
       // Fetch questions
@@ -128,25 +182,42 @@ export default function QuizSession() {
     if (isSubmitted || (needsName && !studentName)) return;
     setIsSubmitted(true);
     
-    let score = 0;
+    let rightAnswers = 0;
+    let attempted = 0;
+    
     questions.forEach(q => {
-      if (answers[q.id] === q.answer) score++;
+      const studentAnswer = answers[q.id];
+      if (studentAnswer) {
+        attempted++;
+        if (studentAnswer === q.answer) rightAnswers++;
+      }
     });
+
+    const wrongAnswers = attempted - rightAnswers;
+    const totalQuestions = questions.length;
+    const percentage = (rightAnswers / totalQuestions) * 100;
+    const passingMarks = test?.passingMarks || 40;
 
     try {
       await addDoc(collection(db, 'submissions'), {
         studentId: auth.currentUser?.uid || 'anonymous',
-        studentName: studentName || auth.currentUser?.displayName || 'Unknown',
+        studentName: studentName || 'Unknown',
+        studentRollNo: studentRollNo,
         testId: test?.id,
         collegeId: test?.collegeId || null,
-        answers,
-        score,
-        total: questions.length,
-        status: (score / questions.length) >= (test?.passingMarks / 100) ? 'PASS' : 'FAIL',
+        answers, // This stores the raw response sheet
+        score: rightAnswers,
+        total: totalQuestions,
+        rightAnswers,
+        wrongAnswers,
+        attempted,
+        percentage: Number(percentage.toFixed(2)),
+        status: percentage >= passingMarks ? 'PASS' : 'FAIL',
+        released: false, // Teacher must release it
         violations,
         submittedAt: serverTimestamp()
       });
-      // Try to exit fullscreen
+      
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(e => console.error(e));
       }
@@ -154,6 +225,7 @@ export default function QuizSession() {
     } catch (e) {
       console.error(e);
       alert("Submission failed. Check your connection.");
+      setIsSubmitted(false);
     }
   };
 
@@ -196,7 +268,7 @@ export default function QuizSession() {
     );
   }
 
-  if (test?.settings?.forceFullscreen && !isFullscreen) {
+  if (test?.settings?.forceFullscreen && !test?.isPractice && !isFullscreen) {
     return (
       <div className="h-screen flex items-center justify-center bg-red-950 p-6">
          <div className="text-center max-w-md">
@@ -219,7 +291,11 @@ export default function QuizSession() {
   return (
     <div className="min-h-screen bg-[#FAFAFA] flex flex-col select-none relative" ref={containerRef}>
       {/* Quiz Header */}
-      <header className="h-24 bg-white border-b border-slate-100 px-12 flex items-center justify-between sticky top-0 z-40 bg-white/80 backdrop-blur-md">
+      <header className={cn(
+        "h-24 bg-white border-b border-slate-100 px-12 flex items-center justify-between sticky top-0 z-40 bg-white/80 backdrop-blur-md transition-all duration-300",
+        isFullscreen && "max-h-0 py-0 overflow-hidden opacity-0 sm:max-h-24 sm:py-5 sm:opacity-100",
+        "mobile-landscape:hidden"
+      )}>
         <div className="flex items-center gap-6">
           <div className="w-14 h-14 bg-slate-900 text-white rounded-[1.5rem] flex items-center justify-center font-black text-xl shadow-lg shadow-slate-200">
             {currentIdx + 1}
@@ -328,7 +404,10 @@ export default function QuizSession() {
         </AnimatePresence>
 
         {/* Footer Nav */}
-        <div className="flex justify-between items-center bg-white/60 backdrop-blur-md p-6 rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/40 sticky bottom-10">
+        <div className={cn(
+          "flex justify-between items-center bg-white/60 backdrop-blur-md p-6 rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/40 sticky bottom-10 transition-all duration-300",
+          isFullscreen && "max-h-0 py-0 overflow-hidden opacity-0 sm:max-h-32 sm:py-6 sm:opacity-100"
+        )}>
           <button 
             disabled={currentIdx === 0}
             onClick={() => setCurrentIdx(prev => prev - 1)}

@@ -98,12 +98,12 @@ export default function SuperAdminDashboard() {
       {/* Top Bar */}
       <nav className="h-20 bg-white border-b border-slate-200 px-8 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-indigo-100">
+          <div className="w-12 h-12 bg-purple-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-purple-100">
             <ShieldCheck size={28} />
           </div>
           <div>
-            <h1 className="font-black text-xl uppercase tracking-tighter text-slate-800">SuperAdmin Central</h1>
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Global Infrastructure Control</p>
+            <h1 className="font-black text-xl uppercase tracking-tighter text-slate-800">EliteAdmin Control</h1>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Global Infrastructure Oversight</p>
           </div>
         </div>
 
@@ -127,7 +127,7 @@ export default function SuperAdminDashboard() {
           </div>
           <button 
             onClick={() => setShowModal(true)}
-            className="px-8 py-5 bg-indigo-600 hover:bg-slate-900 text-white font-black rounded-[2rem] flex items-center gap-4 transition-all shadow-2xl shadow-indigo-100 hover:scale-[1.02] active:scale-95"
+            className="px-8 py-5 bg-purple-600 hover:bg-slate-900 text-white font-black rounded-[2rem] flex items-center gap-4 transition-all shadow-2xl shadow-purple-100 hover:scale-[1.02] active:scale-95"
           >
             <Plus size={24} />
             REGISTER NEW COLLEGE
@@ -140,7 +140,7 @@ export default function SuperAdminDashboard() {
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Total Institutions</p>
             <div className="flex items-end gap-4">
               <span className="text-5xl font-black text-slate-900">{colleges.length}</span>
-              <Building2 className="mb-2 text-indigo-500" size={32} />
+              <Building2 className="mb-2 text-purple-500" size={32} />
             </div>
           </div>
           <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/50">
@@ -162,16 +162,16 @@ export default function SuperAdminDashboard() {
         {/* College Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {colleges.map((college) => (
-            <motion.div 
-              layout
-              key={college.id}
-              className="bg-white group overflow-hidden rounded-[3rem] border border-slate-200 hover:border-indigo-400 transition-all shadow-xl shadow-slate-200/40 relative"
-            >
-              <div className="p-10">
-                <div className="flex justify-between items-start mb-8">
-                  <div className="w-16 h-16 bg-slate-50 rounded-3xl flex items-center justify-center text-slate-400 group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-all border border-slate-100">
-                    <School size={32} />
-                  </div>
+              <motion.div 
+                layout
+                key={college.id}
+                className="bg-white group overflow-hidden rounded-[3rem] border border-slate-200 hover:border-purple-400 transition-all shadow-xl shadow-slate-200/40 relative"
+              >
+                <div className="p-10">
+                  <div className="flex justify-between items-start mb-8">
+                    <div className="w-16 h-16 bg-slate-50 rounded-3xl flex items-center justify-center text-slate-400 group-hover:bg-purple-50 group-hover:text-purple-600 transition-all border border-slate-100">
+                      <School size={32} />
+                    </div>
                   <button 
                     onClick={() => setConfirmDelete(college.id)}
                     className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all"
@@ -188,7 +188,7 @@ export default function SuperAdminDashboard() {
 
                 <div className="space-y-4 pt-6 border-t border-slate-100">
                   <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600">
+                    <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center text-purple-600">
                       <UserIcon size={18} />
                     </div>
                     <div>

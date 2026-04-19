@@ -106,7 +106,7 @@ service cloud.firestore {
       }
 
       allow read: if isSignedIn();
-      allow create: if isTeacher() && isValidTest(incoming()) && incoming().teacherId == request.auth.uid;
+      allow create: if (isTeacher() || isPrincipal(incoming().collegeId)) && isValidTest(incoming()) && (incoming().teacherId == request.auth.uid || isPrincipal(incoming().collegeId));
       allow update: if (isSuperAdmin() || isPrincipal(existing().collegeId) || (isTeacher() && existing().teacherId == request.auth.uid)) && isValidTest(incoming());
       allow delete: if isSuperAdmin() || isPrincipal(existing().collegeId) || (isTeacher() && existing().teacherId == request.auth.uid);
     }
@@ -124,7 +124,11 @@ service cloud.firestore {
       allow list: if isSuperAdmin() || isTeacher() || (isSignedIn() && (isPrincipal(resource.data.collegeId) || resource.data.studentId == request.auth.uid));
       
       allow create: if isSignedIn() && isValidSubmission(incoming()) && (incoming().studentId == request.auth.uid || incoming().studentId == 'anonymous');
-      allow update, delete: if isSuperAdmin();
+      
+      allow update: if (isSuperAdmin() || isPrincipal(existing().collegeId) || isTeacher()) && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['released']);
+      
+      allow delete: if isSuperAdmin();
     }
 
     // --- Class Rules ---

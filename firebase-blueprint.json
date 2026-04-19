@@ -17,6 +17,7 @@
       "type": "object",
       "properties": {
         "displayName": { "type": "string" },
+        "officialName": { "type": "string" },
         "email": { "type": "string" },
         "role": { "type": "string", "enum": ["superadmin", "principal", "teacher", "student"] },
         "collegeId": { "type": "string" },
@@ -60,6 +61,7 @@
         "settings": { "type": "object" },
         "status": { "type": "string", "enum": ["active", "inactive"] },
         "isPractice": { "type": "boolean" },
+        "visible": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["title", "teacherId", "questionIds"]
@@ -71,12 +73,18 @@
       "properties": {
         "studentId": { "type": "string" },
         "studentName": { "type": "string" },
+        "studentRollNo": { "type": "string" },
         "testId": { "type": "string" },
         "collegeId": { "type": "string" },
         "answers": { "type": "object" },
         "score": { "type": "number" },
         "total": { "type": "number" },
+        "rightAnswers": { "type": "number" },
+        "wrongAnswers": { "type": "number" },
+        "attempted": { "type": "number" },
+        "percentage": { "type": "number" },
         "status": { "type": "string", "enum": ["PASS", "FAIL"] },
+        "released": { "type": "boolean" },
         "violations": { "type": "object" },
         "submittedAt": { "type": "string", "format": "date-time" }
       },

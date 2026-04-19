@@ -1,10 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, ChangeEvent } from 'react';
 import { db, auth } from '../../lib/firebase';
 import { collection, query, getDocs, addDoc, serverTimestamp, orderBy, deleteDoc, doc, setDoc, where, getDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, BrainCircuit, Search, Loader2, CheckCircle2, Trash2, BookOpen, LayoutDashboard, ShieldCheck, Edit3 } from 'lucide-react';
+import { Plus, BrainCircuit, Search, Loader2, CheckCircle2, Trash2, BookOpen, LayoutDashboard, ShieldCheck, Edit3, FileUp, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { generateQuestionsAI } from '../../services/geminiService';
+import * as pdfjs from 'pdfjs-dist';
+import mammoth from 'mammoth';
+import * as XLSX from 'xlsx';
+
+// Set up PDF.js worker
+pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
 export default function QuestionBank() {
   const [questions, setQuestions] = useState<any[]>([]);
@@ -14,6 +20,112 @@ export default function QuestionBank() {
   const [showManualModal, setShowManualModal] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<any>(null);
   
+  // Filtering states
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeSubject, setActiveSubject] = useState("all");
+  const [activeChapter, setActiveChapter] = useState("all");
+
+  // AI Form state
+  const [aiTopic, setAiTopic] = useState("");
+  const [aiCount, setAiCount] = useState(5);
+  const [aiDiff, setAiDiff] = useState("medium");
+  const [aiSubject, setAiSubject] = useState("Electrician");
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [fileContent, setFileContent] = useState("");
+  const [isReadingFile, setIsReadingFile] = useState(false);
+
+  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadedFile(file);
+    setIsReadingFile(true);
+    try {
+      let content = "";
+      const extension = file.name.split('.').pop()?.toLowerCase();
+
+      if (extension === 'pdf') {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const text = await page.getTextContent();
+          content += text.items.map((item: any) => item.str).join(' ');
+        }
+      } else if (extension === 'docx') {
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        content = result.value;
+      } else if (extension === 'xlsx' || extension === 'xls') {
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = XLSX.read(arrayBuffer);
+        workbook.SheetNames.forEach(name => {
+          const sheet = workbook.Sheets[name];
+          content += XLSX.utils.sheet_to_txt(sheet);
+        });
+      } else {
+        content = await file.text();
+      }
+      setFileContent(content.slice(0, 15000)); // Limit to 15k chars for prompt
+    } catch (err) {
+      console.error("File Read Error:", err);
+      alert("Failed to read file content.");
+    } finally {
+      setIsReadingFile(false);
+    }
+  };
+
+  const generateWithAi = async () => {
+    if (!aiTopic && !fileContent) return;
+    setIsGenerating(true);
+    try {
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+      const userData = userDoc.data();
+      const collegeId = userData?.collegeId;
+
+      const questionsData = await generateQuestionsAI(aiSubject, aiTopic, aiDiff, aiCount, fileContent);
+      
+      for (const q of questionsData) {
+        await addDoc(collection(db, 'questions'), {
+          ...q,
+          collegeId,
+          subject: aiSubject,
+          chapter: aiTopic || (uploadedFile?.name.split('.')[0]) || "AI Generated",
+          createdAt: serverTimestamp(),
+          createdBy: auth.currentUser?.uid
+        });
+      }
+      
+      fetchQuestions();
+      setShowAiModal(false);
+      setAiTopic("");
+      setUploadedFile(null);
+      setFileContent("");
+    } catch (e) {
+      console.error(e);
+      alert("AI Generation failed. Please try again.");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const filteredQuestions = questions.filter(q => {
+    const matchesSearch = q.text.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                         q.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         q.chapter.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSubject = activeSubject === 'all' || q.subject === activeSubject;
+    const matchesChapter = activeChapter === 'all' || q.chapter === activeChapter;
+    return matchesSearch && matchesSubject && matchesChapter;
+  });
+
+  const subjects = ['all', ...Array.from(new Set(questions.map(q => q.subject)))] as string[];
+  const chapters = ['all', ...Array.from(new Set(questions.filter(q => activeSubject === 'all' || q.subject === activeSubject).map(q => q.chapter)))] as string[];
+
+  const handleSubjectChange = (s: string) => {
+    setActiveSubject(s);
+    setActiveChapter('all');
+  };
+
   // Manual Form State
   const initialForm = {
     text: "",
@@ -27,12 +139,6 @@ export default function QuestionBank() {
   };
   const [form, setForm] = useState(initialForm);
   const [savingManual, setSavingManual] = useState(false);
-  
-  // AI Form state
-  const [aiTopic, setAiTopic] = useState("");
-  const [aiCount, setAiCount] = useState(5);
-  const [aiDiff, setAiDiff] = useState("medium");
-  const [aiSubject, setAiSubject] = useState("Electrician");
 
   useEffect(() => {
     fetchQuestions();
@@ -119,38 +225,6 @@ export default function QuestionBank() {
     setShowManualModal(true);
   };
 
-  const generateWithAi = async () => {
-    if (!aiTopic) return;
-    setIsGenerating(true);
-    try {
-      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
-      const userData = userDoc.data();
-      const collegeId = userData?.collegeId;
-
-      const questionsData = await generateQuestionsAI(aiSubject, aiTopic, aiDiff, aiCount);
-      
-      // Batch save to Firestore
-      for (const q of questionsData) {
-        await addDoc(collection(db, 'questions'), {
-          ...q,
-          collegeId,
-          subject: aiSubject,
-          chapter: aiTopic.slice(0, 20), // Use topic as chapter name for AI gen
-          createdAt: serverTimestamp(),
-          createdBy: auth.currentUser?.uid
-        });
-      }
-      
-      fetchQuestions();
-      setShowAiModal(false);
-      setAiTopic("");
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/40">
@@ -181,8 +255,43 @@ export default function QuestionBank() {
         <input 
           type="text" 
           placeholder="Filter by subject, chapter, or question text..."
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
           className="w-full pl-16 pr-8 py-6 bg-white border border-slate-100 rounded-[2rem] shadow-xl shadow-slate-200/40 focus:border-blue-600 outline-none transition-all font-bold text-slate-700"
         />
+      </div>
+
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap gap-2">
+          {subjects.map(s => (
+            <button
+              key={s}
+              onClick={() => handleSubjectChange(s)}
+              className={cn(
+                "px-6 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest border transition-all",
+                activeSubject === s ? "bg-indigo-600 border-indigo-600 text-white shadow-lg" : "bg-white border-slate-100 text-slate-400 hover:border-slate-300"
+              )}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+        {activeSubject !== 'all' && (
+          <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100">
+            {chapters.map(c => (
+              <button
+                key={c}
+                onClick={() => setActiveChapter(c)}
+                className={cn(
+                  "px-4 py-2 rounded-lg font-bold text-[9px] uppercase tracking-widest border transition-all",
+                  activeChapter === c ? "bg-slate-900 border-slate-900 text-white" : "bg-slate-50 border-slate-100 text-slate-400 hover:bg-slate-100"
+                )}
+              >
+                {c === 'all' ? 'All Chapters' : c}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -192,7 +301,7 @@ export default function QuestionBank() {
         </div>
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 pb-24">
-          {questions.map((q) => (
+          {filteredQuestions.map((q) => (
             <motion.div 
               key={q.id} 
               layout
@@ -446,6 +555,40 @@ export default function QuestionBank() {
                     className="w-full p-4 h-32 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-600 outline-none transition-all font-medium resize-none"
                   />
                   <p className="text-xs text-slate-400 mt-2">The more specific context you provide, the better the questions.</p>
+                </div>
+
+                <div className="bg-slate-50 p-6 rounded-2xl border-2 border-dashed border-slate-200 group-hover:border-indigo-400 transition-all">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <FileUp size={24} className="text-indigo-600" />
+                      <div>
+                        <p className="text-xs font-black uppercase text-slate-700">Source Document</p>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase">PDF, DOCX, XLSX</p>
+                      </div>
+                    </div>
+                    {uploadedFile && (
+                      <button 
+                        onClick={() => { setUploadedFile(null); setFileContent(""); }}
+                        className="p-2 hover:bg-red-50 text-red-500 rounded-lg"
+                      >
+                        <X size={16} />
+                      </button>
+                    )}
+                  </div>
+                  
+                  {uploadedFile ? (
+                    <div className="bg-white p-3 rounded-xl border border-indigo-100 flex items-center justify-between">
+                      <span className="text-[10px] font-black uppercase text-indigo-600 truncate max-w-[200px]">{uploadedFile.name}</span>
+                      {isReadingFile ? <Loader2 size={12} className="animate-spin text-indigo-600" /> : <div className="w-2 h-2 rounded-full bg-emerald-500" />}
+                    </div>
+                  ) : (
+                    <label className="cursor-pointer">
+                      <input type="file" className="hidden" accept=".pdf,.docx,.xlsx,.xls,.txt" onChange={handleFileChange} />
+                      <div className="py-4 text-center border-2 border-slate-200 border-dashed rounded-xl hover:bg-white hover:border-indigo-600 transition-all">
+                        <span className="text-[10px] font-black uppercase text-slate-400">Click to Upload Materials</span>
+                      </div>
+                    </label>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">

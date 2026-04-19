@@ -21,6 +21,24 @@ import { cn } from '../lib/utils';
 import { signOut } from 'firebase/auth';
 import { useNavigate } from 'react-router-dom';
 
+import { 
+  LineChart, 
+  Line, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  Cell
+} from 'recharts';
+
+import QuestionBank from './teacher/QuestionBank';
+import TestCreator from './teacher/TestCreator';
+
 export default function PrincipalDashboard() {
   const navigate = useNavigate();
   const [stats, setStats] = useState({
@@ -38,7 +56,12 @@ export default function PrincipalDashboard() {
   const [recentSubmissions, setRecentSubmissions] = useState<any[]>([]);
   const [newTeacher, setNewTeacher] = useState({ name: '', email: '' });
   const [newClass, setNewClass] = useState({ name: '', teacherId: '' });
+  const [showSettings, setShowSettings] = useState(false);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'bank' | 'tests'>('dashboard');
   const [saving, setSaving] = useState(false);
+  const [performanceData, setPerformanceData] = useState<any[]>([]);
+  const [teacherMetrics, setTeacherMetrics] = useState<Record<string, any>>({});
+  const [settings, setSettings] = useState({ collegeName: '', location: '' });
 
   useEffect(() => {
     fetchDashboardData();
@@ -51,12 +74,14 @@ export default function PrincipalDashboard() {
       
       if (userData?.collegeId) {
         const cSnap = await getDoc(doc(db, 'colleges', userData.collegeId));
-        setCollegeData({ id: cSnap.id, ...cSnap.data() });
+        const cData = cSnap.data();
+        setCollegeData({ id: cSnap.id, ...cData });
+        setSettings({ collegeName: cData?.name || '', location: cData?.location || '' });
 
         // 1. Teachers
         const teachersQ = query(collection(db, 'users'), where('collegeId', '==', userData.collegeId), where('role', '==', 'teacher'));
         const teachersSnap = await getDocs(teachersQ);
-        const teacherList = teachersSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const teacherList = teachersSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
         setTeachers(teacherList);
         
         // 2. Students
@@ -66,29 +91,43 @@ export default function PrincipalDashboard() {
         // 3. Tests
         const testsQ = query(collection(db, 'tests'), where('collegeId', '==', userData.collegeId));
         const testsSnap = await getDocs(testsQ);
+        const testList = testsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
 
         // 4. Submissions (Recent)
-        const subQ = query(
-          collection(db, 'submissions'), 
-          where('collegeId', '==', userData.collegeId),
-          orderBy('submittedAt', 'desc'),
-          limit(5)
-        );
-        const subSnap = await getDocs(subQ);
-        const subList = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setRecentSubmissions(subList);
-
-        // 5. Global Submissions for stats
-        const allSubQ = query(collection(db, 'submissions'), where('collegeId', '==', userData.collegeId));
+        const allSubQ = query(collection(db, 'submissions'), where('collegeId', '==', userData.collegeId), orderBy('submittedAt', 'desc'));
         const allSubSnap = await getDocs(allSubQ);
-        const passCount = allSubSnap.docs.filter(d => d.data().status === 'PASS').length;
+        const allSubs = allSubSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+        
+        setRecentSubmissions(allSubs.slice(0, 5));
+
+        // Insights Logic
+        const passCount = allSubs.filter((d: any) => d.status === 'PASS').length;
+        
+        const metrics: Record<string, any> = {};
+        teacherList.forEach(t => {
+          const tTests = testList.filter((test: any) => test.teacherId === t.id);
+          const tSubs = allSubs.filter((s: any) => tTests.some(test => test.id === s.testId));
+          metrics[t.id] = {
+            testCount: tTests.length,
+            subCount: tSubs.length,
+            passRate: tSubs.length ? Math.round((tSubs.filter((s: any) => s.status === 'PASS').length / tSubs.length) * 100) : 0
+          };
+        });
+        setTeacherMetrics(metrics);
+
+        // Performance Trend (last 6 months or similar, simplified for now)
+        const trend = allSubs.slice(0, 50).reverse().map((s: any, i: number) => ({
+          name: i,
+          score: s.percentage || 0
+        }));
+        setPerformanceData(trend);
 
         setStats({
           totalTeachers: teachersSnap.size,
           totalStudents: studentsSnap.size,
           totalTests: testsSnap.size,
-          overallPassRate: allSubSnap.size ? Math.round((passCount / allSubSnap.size) * 100) : 0,
-          totalSubmissions: allSubSnap.size
+          overallPassRate: allSubs.length ? Math.round((passCount / allSubs.length) * 100) : 0,
+          totalSubmissions: allSubs.length
         });
       }
     } catch (e) {
@@ -96,6 +135,48 @@ export default function PrincipalDashboard() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleUpdateSettings = async () => {
+    if (!collegeData || !settings.collegeName) return;
+    setSaving(true);
+    try {
+      await setDoc(doc(db, 'colleges', collegeData.id), {
+        name: settings.collegeName,
+        location: settings.location
+      }, { merge: true });
+      setCollegeData({ ...collegeData, name: settings.collegeName });
+      setShowSettings(false);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleExport = () => {
+    const headers = ["Student Name", "Roll No", "Test ID", "Score", "Total", "Percentage", "Status", "Date"];
+    const rows = recentSubmissions.map(s => [
+      s.studentName,
+      s.studentRollNo,
+      s.testId,
+      s.score,
+      s.total,
+      s.percentage + "%",
+      s.status,
+      new Date(s.submittedAt?.seconds * 1000).toLocaleDateString()
+    ]);
+    
+    const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Institutional_Report_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleAddTeacher = async () => {
@@ -146,13 +227,35 @@ export default function PrincipalDashboard() {
     <div className="min-h-screen bg-[#FDFDFD]">
       {/* Navigation */}
       <nav className="h-20 bg-white border-b border-slate-100 px-8 flex items-center justify-between sticky top-0 z-50">
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-emerald-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-emerald-100">
-            <School size={28} />
+        <div className="flex items-center gap-12">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-emerald-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-emerald-100">
+              <School size={28} />
+            </div>
+            <div>
+              <h1 className="font-black text-xl uppercase tracking-tighter text-slate-800">{collegeData?.name || 'Principal Dashboard'}</h1>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Institutional Oversight Panel</p>
+            </div>
           </div>
-          <div>
-            <h1 className="font-black text-xl uppercase tracking-tighter text-slate-800">{collegeData?.name || 'Principal Dashboard'}</h1>
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Institutional Oversight Panel</p>
+
+          <div className="hidden md:flex items-center gap-2">
+            {[
+              { id: 'dashboard' as const, label: 'Analytics', icon: BarChart3 },
+              { id: 'bank' as const, label: 'Question Bank', icon: BookOpen },
+              { id: 'tests' as const, label: 'Test Management', icon: ShieldCheck },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  "flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all",
+                  activeTab === tab.id ? "bg-emerald-600 text-white shadow-lg shadow-emerald-100" : "text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+                )}
+              >
+                <tab.icon size={16} />
+                {tab.label}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -168,17 +271,25 @@ export default function PrincipalDashboard() {
       </nav>
 
       <main className="p-12 max-w-7xl mx-auto space-y-12">
-        {/* Dynamic Greeting */}
+        {activeTab === 'dashboard' && (
+          <>
+            {/* Dynamic Greeting */}
         <div className="flex justify-between items-center">
           <div>
             <h2 className="text-4xl font-black text-slate-900 tracking-tighter uppercase">Academic Health Monitor</h2>
             <p className="text-slate-500 font-bold mt-1">Institutional summary for the current term</p>
           </div>
           <div className="flex gap-4">
-             <button className="px-6 py-3 bg-white border-2 border-slate-100 hover:border-emerald-600 text-slate-700 font-black rounded-2xl transition-all uppercase tracking-widest text-[10px] flex items-center gap-2">
+             <button 
+               onClick={handleExport}
+               className="px-6 py-3 bg-white border-2 border-slate-100 hover:border-rose-600 text-slate-700 font-black rounded-2xl transition-all uppercase tracking-widest text-[10px] flex items-center gap-2"
+             >
                 <BarChart3 size={16} /> Export Reports
              </button>
-             <button className="px-6 py-3 bg-emerald-600 text-white font-black rounded-2xl transition-all uppercase tracking-widest text-[10px] flex items-center gap-2">
+             <button 
+               onClick={() => setShowSettings(true)}
+               className="px-6 py-3 bg-rose-600 text-white font-black rounded-2xl transition-all uppercase tracking-widest text-[10px] flex items-center gap-2"
+             >
                 <Settings size={16} /> Settings
              </button>
           </div>
@@ -208,6 +319,40 @@ export default function PrincipalDashboard() {
           ))}
         </div>
 
+        {/* Growth Trend for Principal */}
+        <div className="bg-white p-12 rounded-[3.5rem] border border-slate-100 shadow-xl shadow-slate-200/50">
+           <div className="flex justify-between items-center mb-10">
+              <div>
+                <h3 className="text-xl font-black uppercase tracking-tight text-slate-800">Institutional Efficiency Trend</h3>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Snapshot of recent academic submissions & delta scores</p>
+              </div>
+              <div className="text-right">
+                 <p className="text-2xl font-black text-rose-600">{stats.totalSubmissions}</p>
+                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Active Audit Trail</p>
+              </div>
+           </div>
+           <div className="h-[300px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                 <AreaChart data={performanceData}>
+                    <defs>
+                      <linearGradient id="colorPrincipal" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#be123c" stopOpacity={0.1}/>
+                        <stop offset="95%" stopColor="#be123c" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="name" hide />
+                    <YAxis domain={[0, 100]} hide />
+                    <Tooltip 
+                      contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)', fontWeight: 'bold', fontSize: '10px' }}
+                      formatter={(val: any) => [`${val}%`, 'Institutional Score']}
+                    />
+                    <Area type="monotone" dataKey="score" stroke="#be123c" strokeWidth={4} fillOpacity={1} fill="url(#colorPrincipal)" />
+                 </AreaChart>
+              </ResponsiveContainer>
+           </div>
+        </div>
+
         {/* Main Content Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Recent Activity */}
@@ -235,9 +380,19 @@ export default function PrincipalDashboard() {
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{teacher.email}</p>
                       </div>
                     </div>
-                    <div className="text-right">
-                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Authorization</p>
-                       <p className="font-black text-emerald-600 uppercase text-xs">Vetted Access</p>
+                    <div className="flex items-center gap-8">
+                       <div className="text-center">
+                          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Exams</p>
+                          <p className="font-black text-slate-800 uppercase text-xs">{teacherMetrics[teacher.id]?.testCount || 0}</p>
+                       </div>
+                       <div className="text-center">
+                          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Subs</p>
+                          <p className="font-black text-slate-800 uppercase text-xs">{teacherMetrics[teacher.id]?.subCount || 0}</p>
+                       </div>
+                       <div className="text-right border-l border-slate-100 pl-8">
+                          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Efficiency</p>
+                          <p className="font-black text-rose-600 uppercase text-xs">{teacherMetrics[teacher.id]?.passRate || 0}% Pass</p>
+                       </div>
                     </div>
                   </div>
                 ))}
@@ -330,6 +485,11 @@ export default function PrincipalDashboard() {
             </div>
           </div>
         </div>
+      </>
+    )}
+
+        {activeTab === 'bank' && <QuestionBank />}
+        {activeTab === 'tests' && <TestCreator />}
       </main>
 
       {/* Modals */}
@@ -342,14 +502,36 @@ export default function PrincipalDashboard() {
               <div className="space-y-6">
                 <div>
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Teacher Full Name</label>
-                  <input type="text" value={newTeacher.name} onChange={e => setNewTeacher({...newTeacher, name: e.target.value})} className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-emerald-600 rounded-2xl outline-none font-bold" />
+                  <input type="text" value={newTeacher.name} onChange={e => setNewTeacher({...newTeacher, name: e.target.value})} className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-rose-600 rounded-2xl outline-none font-bold" />
                 </div>
                 <div>
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Enterprise Email</label>
-                  <input type="email" value={newTeacher.email} onChange={e => setNewTeacher({...newTeacher, email: e.target.value})} className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-emerald-600 rounded-2xl outline-none font-bold" />
+                  <input type="email" value={newTeacher.email} onChange={e => setNewTeacher({...newTeacher, email: e.target.value})} className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-rose-600 rounded-2xl outline-none font-bold" />
                 </div>
-                <button onClick={handleAddTeacher} disabled={saving} className="w-full py-6 bg-slate-900 text-white font-black rounded-3xl hover:bg-emerald-600 transition-all flex items-center justify-center gap-3">
+                <button onClick={handleAddTeacher} disabled={saving} className="w-full py-6 bg-rose-600 text-white font-black rounded-3xl hover:bg-rose-700 transition-all flex items-center justify-center gap-3 shadow-xl shadow-rose-100">
                   {saving ? <Loader2 className="animate-spin" /> : <ShieldCheck size={20} />} AUTHENTICATE & REGISTER
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {showSettings && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowSettings(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white w-full max-w-lg rounded-[3.5rem] p-12 relative shadow-2xl">
+              <h3 className="text-3xl font-black text-slate-900 uppercase tracking-tighter mb-8 italic text-center">Institutional Config</h3>
+              <div className="space-y-6">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">College / School Name</label>
+                  <input type="text" value={settings.collegeName} onChange={e => setSettings({...settings, collegeName: e.target.value})} className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-rose-600 rounded-2xl outline-none font-bold" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Location / City</label>
+                  <input type="text" value={settings.location} onChange={e => setSettings({...settings, location: e.target.value})} className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-rose-600 rounded-2xl outline-none font-bold" />
+                </div>
+                <button onClick={handleUpdateSettings} disabled={saving} className="w-full py-6 bg-rose-600 text-white font-black rounded-3xl hover:bg-rose-700 transition-all flex items-center justify-center gap-3">
+                  {saving ? <Loader2 className="animate-spin" /> : <Settings size={20} />} UPDATE CREDENTIALS
                 </button>
               </div>
             </motion.div>

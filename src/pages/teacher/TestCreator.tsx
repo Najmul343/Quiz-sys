@@ -35,6 +35,7 @@ export default function TestCreator() {
   const [shuffleOptions, setShuffleOptions] = useState(true);
   const [isPractice, setIsPractice] = useState(false);
   const [authRequired, setAuthRequired] = useState(true);
+  const [isVisible, setIsVisible] = useState(true);
   
   // Filtering
   const [subjectFilter, setSubjectFilter] = useState("all");
@@ -58,7 +59,8 @@ export default function TestCreator() {
         setTitle(data.title);
         setDuration(data.duration);
         setPassingMarks(data.passingMarks);
-        setIsPractice(data.isPractice);
+        setIsPractice(data.isPractice || false);
+        setIsVisible(data.visible !== undefined ? data.visible : true);
         setForceFullscreen(data.settings.forceFullscreen);
         setShuffleQ(data.settings.shuffleQuestions);
         setShuffleOptions(data.settings.shuffleOptions);
@@ -101,6 +103,7 @@ export default function TestCreator() {
         duration,
         passingMarks,
         isPractice,
+        visible: isVisible,
         collegeId,
         settings: { 
           forceFullscreen, 
@@ -132,6 +135,16 @@ export default function TestCreator() {
     setSelectedIds(prev => 
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
     );
+  };
+
+  const selectVisible = () => {
+    const visibleIds = filteredQuestions.map(q => q.id);
+    setSelectedIds(prev => Array.from(new Set([...prev, ...visibleIds])));
+  };
+
+  const deselectVisible = () => {
+    const visibleIds = filteredQuestions.map(q => q.id);
+    setSelectedIds(prev => prev.filter(id => !visibleIds.includes(id)));
   };
 
   const subjects = ['all', ...Array.from(new Set(questions.map(q => q.subject)))];
@@ -202,6 +215,7 @@ export default function TestCreator() {
                 { label: 'Shuffle Options', state: shuffleOptions, set: setShuffleOptions, icon: CheckCircle2, color: 'emerald' },
                 { label: 'Practice Mode', state: isPractice, set: setIsPractice, icon: Plus, color: 'amber' },
                 { label: 'Require Auth', state: authRequired, set: setAuthRequired, icon: Settings2, color: 'slate' },
+                { label: 'Visible to Students', state: isVisible, set: setIsVisible, icon: CheckCircle2, color: 'emerald' },
               ].map(opt => (
                 <label key={opt.label} className={cn(
                   "flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all border-2",
@@ -261,10 +275,16 @@ export default function TestCreator() {
           
           <div className="flex gap-4 w-full md:w-auto">
              <button 
-               onClick={() => setSelectedIds([])}
+               onClick={selectVisible}
+               className="p-3 bg-indigo-50 border border-indigo-100 text-indigo-600 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-indigo-100 transition-all"
+             >
+               Select Page
+             </button>
+             <button 
+               onClick={deselectVisible}
                className="p-3 bg-rose-50 border border-rose-100 text-rose-600 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-rose-100 transition-all"
              >
-               Deselect All
+               Clear Page
              </button>
              <select 
                value={subjectFilter}
