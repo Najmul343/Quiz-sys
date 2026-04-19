@@ -25,6 +25,7 @@ export default function SuperAdminDashboard() {
   const [colleges, setColleges] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [newCollege, setNewCollege] = useState({ name: '', location: '', principalEmail: '', principalName: '' });
   const [saving, setSaving] = useState(false);
 
@@ -78,13 +79,15 @@ export default function SuperAdminDashboard() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure? This will remove the college entry.")) return;
+  const handleDelete = async () => {
+    if (!confirmDelete) return;
     try {
-      await deleteDoc(doc(db, 'colleges', id));
+      await deleteDoc(doc(db, 'colleges', confirmDelete));
+      setConfirmDelete(null);
       fetchColleges();
     } catch (e) {
       console.error(e);
+      alert("Removal failed. Verify administrative permissions.");
     }
   };
 
@@ -170,7 +173,7 @@ export default function SuperAdminDashboard() {
                     <School size={32} />
                   </div>
                   <button 
-                    onClick={() => handleDelete(college.id)}
+                    onClick={() => setConfirmDelete(college.id)}
                     className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all"
                   >
                     <Trash2 size={20} />
@@ -208,6 +211,49 @@ export default function SuperAdminDashboard() {
           ))}
         </div>
       </main>
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {confirmDelete && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setConfirmDelete(null)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl relative overflow-hidden p-10 text-center"
+            >
+              <div className="w-20 h-20 bg-red-50 rounded-3xl flex items-center justify-center text-red-600 mx-auto mb-6">
+                <Trash2 size={32} />
+              </div>
+              <h3 className="text-xl font-black text-slate-900 uppercase tracking-tighter mb-2">Confirm Removal?</h3>
+              <p className="text-slate-500 font-bold text-xs leading-relaxed mb-8">
+                This will permanently delete the institution and revoke all associated access privileges.
+              </p>
+              <div className="flex gap-4">
+                <button 
+                  onClick={() => setConfirmDelete(null)}
+                  className="flex-1 py-4 bg-slate-100 text-slate-600 font-black rounded-2xl uppercase tracking-widest text-[10px]"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleDelete}
+                  className="flex-1 py-4 bg-red-600 text-white font-black rounded-2xl uppercase tracking-widest text-[10px] shadow-lg shadow-red-100"
+                >
+                  Confirm
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Register Modal */}
       <AnimatePresence>

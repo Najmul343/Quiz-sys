@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../../lib/firebase';
-import { collection, query, getDocs, where } from 'firebase/firestore';
+import { collection, query, getDocs, where, doc, getDoc } from 'firebase/firestore';
 import { motion } from 'framer-motion';
 import { BookOpen, FileText, Users, TrendingUp, AlertCircle, BrainCircuit, ArrowRight, ShieldCheck, Target } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -24,9 +24,15 @@ export default function TeacherOverview() {
 
   const fetchStats = async () => {
     try {
-      const qSnap = await getDocs(query(collection(db, 'questions'), where('createdBy', '==', auth.currentUser?.uid)));
-      const tSnap = await getDocs(query(collection(db, 'tests'), where('teacherId', '==', auth.currentUser?.uid)));
-      const sSnap = await getDocs(query(collection(db, 'users'), where('role', '==', 'student')));
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+      const userData = userDoc.data();
+      const collegeId = userData?.collegeId;
+
+      if (!collegeId) return;
+
+      const qSnap = await getDocs(query(collection(db, 'questions'), where('collegeId', '==', collegeId)));
+      const tSnap = await getDocs(query(collection(db, 'tests'), where('collegeId', '==', collegeId)));
+      const sSnap = await getDocs(query(collection(db, 'users'), where('role', '==', 'student'), where('collegeId', '==', collegeId)));
 
       const tests = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 

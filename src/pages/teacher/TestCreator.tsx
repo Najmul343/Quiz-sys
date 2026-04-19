@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../../lib/firebase';
-import { collection, query, getDocs, addDoc, serverTimestamp, doc, getDoc, setDoc } from 'firebase/firestore';
+import { collection, query, getDocs, addDoc, serverTimestamp, doc, getDoc, setDoc, where } from 'firebase/firestore';
 import { motion } from 'framer-motion';
 import { 
   FilePlus, 
@@ -72,7 +72,13 @@ export default function TestCreator() {
 
   const fetchQuestions = async () => {
     try {
-      const q = query(collection(db, 'questions'));
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+      const userData = userDoc.data();
+      const collegeId = userData?.collegeId;
+
+      if (!collegeId) return;
+
+      const q = query(collection(db, 'questions'), where('collegeId', '==', collegeId));
       const snap = await getDocs(q);
       setQuestions(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     } catch (e) {
@@ -86,11 +92,16 @@ export default function TestCreator() {
     if (!title || selectedIds.length === 0) return;
     setSaving(true);
     try {
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+      const userData = userDoc.data();
+      const collegeId = userData?.collegeId;
+
       const testData = {
         title,
         duration,
         passingMarks,
         isPractice,
+        collegeId,
         settings: { 
           forceFullscreen, 
           shuffleQuestions: shuffleQ, 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../lib/firebase';
-import { collection, query, getDocs, where, addDoc, serverTimestamp, doc, getDoc, setDoc } from 'firebase/firestore';
+import { collection, query, getDocs, where, addDoc, serverTimestamp, doc, getDoc, setDoc, orderBy, limit } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Users, 
@@ -27,13 +27,15 @@ export default function PrincipalDashboard() {
     totalTeachers: 0,
     totalStudents: 0,
     totalTests: 0,
-    overallPassRate: 82
+    overallPassRate: 0,
+    totalSubmissions: 0
   });
   const [loading, setLoading] = useState(true);
   const [collegeData, setCollegeData] = useState<any>(null);
   const [showTeacherModal, setShowTeacherModal] = useState(false);
   const [showClassModal, setShowClassModal] = useState(false);
   const [teachers, setTeachers] = useState<any[]>([]);
+  const [recentSubmissions, setRecentSubmissions] = useState<any[]>([]);
   const [newTeacher, setNewTeacher] = useState({ name: '', email: '' });
   const [newClass, setNewClass] = useState({ name: '', teacherId: '' });
   const [saving, setSaving] = useState(false);
@@ -51,22 +53,42 @@ export default function PrincipalDashboard() {
         const cSnap = await getDoc(doc(db, 'colleges', userData.collegeId));
         setCollegeData({ id: cSnap.id, ...cSnap.data() });
 
+        // 1. Teachers
         const teachersQ = query(collection(db, 'users'), where('collegeId', '==', userData.collegeId), where('role', '==', 'teacher'));
         const teachersSnap = await getDocs(teachersQ);
         const teacherList = teachersSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setTeachers(teacherList);
         
+        // 2. Students
         const studentsQ = query(collection(db, 'users'), where('collegeId', '==', userData.collegeId), where('role', '==', 'student'));
         const studentsSnap = await getDocs(studentsQ);
 
+        // 3. Tests
         const testsQ = query(collection(db, 'tests'), where('collegeId', '==', userData.collegeId));
         const testsSnap = await getDocs(testsQ);
+
+        // 4. Submissions (Recent)
+        const subQ = query(
+          collection(db, 'submissions'), 
+          where('collegeId', '==', userData.collegeId),
+          orderBy('submittedAt', 'desc'),
+          limit(5)
+        );
+        const subSnap = await getDocs(subQ);
+        const subList = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setRecentSubmissions(subList);
+
+        // 5. Global Submissions for stats
+        const allSubQ = query(collection(db, 'submissions'), where('collegeId', '==', userData.collegeId));
+        const allSubSnap = await getDocs(allSubQ);
+        const passCount = allSubSnap.docs.filter(d => d.data().status === 'PASS').length;
 
         setStats({
           totalTeachers: teachersSnap.size,
           totalStudents: studentsSnap.size,
           totalTests: testsSnap.size,
-          overallPassRate: 82
+          overallPassRate: allSubSnap.size ? Math.round((passCount / allSubSnap.size) * 100) : 0,
+          totalSubmissions: allSubSnap.size
         });
       }
     } catch (e) {
@@ -192,34 +214,66 @@ export default function PrincipalDashboard() {
           <div className="lg:col-span-2 space-y-8">
             <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-slate-200/50">
               <div className="flex justify-between items-center mb-10">
-                <h3 className="text-xl font-black uppercase tracking-tight text-slate-800">Department Performance</h3>
-                <button className="text-[10px] font-black text-emerald-600 uppercase tracking-widest hover:underline px-4 py-2 bg-emerald-50 rounded-lg">View All Departments</button>
+                <h3 className="text-xl font-black uppercase tracking-tight text-slate-800">Faculty Roster</h3>
+                <button 
+                  onClick={() => setShowTeacherModal(true)}
+                  className="text-[10px] font-black text-emerald-600 uppercase tracking-widest hover:underline px-4 py-2 bg-emerald-50 rounded-lg"
+                >
+                  Register Teacher
+                </button>
               </div>
               
               <div className="space-y-6">
-                {[
-                  { name: 'Computer Science', tests: 12, performance: '88%', trend: 'up' },
-                  { name: 'Mechanical Engineering', tests: 8, performance: '74%', trend: 'down' },
-                  { name: 'Architecture & Design', tests: 15, performance: '92%', trend: 'up' },
-                ].map((dept) => (
-                  <div key={dept.name} className="flex items-center justify-between p-6 bg-slate-50 rounded-3xl group hover:bg-white hover:shadow-xl hover:shadow-slate-100 transition-all cursor-pointer">
+                {teachers.map((teacher) => (
+                  <div key={teacher.id} className="flex items-center justify-between p-6 bg-slate-50 rounded-3xl group hover:bg-white hover:shadow-xl hover:shadow-slate-100 transition-all cursor-pointer">
                     <div className="flex items-center gap-6">
                       <div className="w-14 h-14 bg-white rounded-2xl flex items-center justify-center shadow-sm text-slate-400 group-hover:text-emerald-600 transition-all">
-                        <BookOpen size={24} />
+                        <Users size={24} />
                       </div>
                       <div>
-                        <p className="font-black text-slate-800 uppercase text-sm tracking-tight">{dept.name}</p>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{dept.tests} Active Evaluations</p>
+                        <p className="font-black text-slate-800 uppercase text-sm tracking-tight">{teacher.displayName}</p>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{teacher.email}</p>
                       </div>
                     </div>
                     <div className="text-right">
-                      <p className="text-2xl font-black text-slate-800">{dept.performance}</p>
-                      <p className={cn("text-[10px] font-black uppercase tracking-widest", dept.trend === 'up' ? "text-emerald-600" : "text-rose-500")}>
-                        {dept.trend === 'up' ? '↑ Increasing' : '↓ Decreasing'}
-                      </p>
+                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Authorization</p>
+                       <p className="font-black text-emerald-600 uppercase text-xs">Vetted Access</p>
                     </div>
                   </div>
                 ))}
+
+                {teachers.length === 0 && (
+                  <div className="py-20 text-center text-slate-400 font-bold uppercase tracking-widest text-xs grayscale">
+                    No Faculty Records Found
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-slate-200/50">
+              <div className="flex justify-between items-center mb-10">
+                <h3 className="text-xl font-black uppercase tracking-tight text-slate-800">Live Response Feed</h3>
+              </div>
+              
+              <div className="space-y-4">
+                {recentSubmissions.map((sub) => (
+                  <div key={sub.id} className="p-4 bg-slate-50 rounded-2xl flex justify-between items-center">
+                    <div>
+                      <p className="font-black text-slate-800 uppercase text-[11px] leading-tight">{sub.studentName}</p>
+                      <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">Score: {sub.score}/{sub.total}</p>
+                    </div>
+                    <div className={cn(
+                      "px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest",
+                      sub.status === 'PASS' ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"
+                    )}>
+                      {sub.status}
+                    </div>
+                  </div>
+                ))}
+                
+                {recentSubmissions.length === 0 && (
+                   <div className="py-10 text-center text-slate-400 uppercase tracking-widest text-[10px] font-bold">Waiting for deployment data...</div>
+                )}
               </div>
             </div>
           </div>

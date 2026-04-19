@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../../lib/firebase';
-import { collection, query, where, getDocs, addDoc, serverTimestamp, setDoc, doc } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, serverTimestamp, setDoc, doc, getDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   UserPlus, 
@@ -30,9 +30,17 @@ export default function StudentManagement() {
 
   const fetchStudents = async () => {
     try {
-      // Find students in teacher's class
-      const q = query(collection(db, 'users'), where('role', '==', 'student'));
-      // Ideally filter by teacher's class ID, but we'll fetch all and filter by teacherId in some field
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+      const userData = userDoc.data();
+      const collegeId = userData?.collegeId;
+
+      if (!collegeId) return;
+
+      const q = query(
+        collection(db, 'users'), 
+        where('role', '==', 'student'),
+        where('collegeId', '==', collegeId)
+      );
       const snap = await getDocs(q);
       setStudents(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     } catch (e) {
@@ -46,8 +54,11 @@ export default function StudentManagement() {
     if (!newStudent.name || !newStudent.email) return;
     setSaving(true);
     try {
-      // Create a user record stub (auth logic is handled separately in Firebase, 
-      // but we can pre-populate the 'users' collection with their role and metadata)
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+      const userData = userDoc.data();
+      const collegeId = userData?.collegeId;
+
+      // Create a user record stub
       const studentId = newStudent.email.replace(/[^a-zA-Z0-9]/g, '_');
       await setDoc(doc(db, 'users', studentId), {
         displayName: newStudent.name,
@@ -55,6 +66,7 @@ export default function StudentManagement() {
         rollNo: newStudent.rollNo,
         trade: newStudent.trade,
         role: 'student',
+        collegeId,
         addedBy: auth.currentUser?.uid,
         createdAt: serverTimestamp()
       });

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../lib/firebase';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, doc, getDoc } from 'firebase/firestore';
 import { motion } from 'framer-motion';
 import { 
   GraduationCap, 
@@ -25,7 +25,18 @@ export default function StudentDashboard() {
 
   const fetchTests = async () => {
     try {
-      const q = query(collection(db, 'tests'), where('status', '==', 'active'), orderBy('createdAt', 'desc'));
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+      const userData = userDoc.data();
+      const collegeId = userData?.collegeId;
+
+      if (!collegeId) return;
+
+      const q = query(
+        collection(db, 'tests'), 
+        where('status', '==', 'active'),
+        where('collegeId', '==', collegeId),
+        orderBy('createdAt', 'desc')
+      );
       const snap = await getDocs(q);
       setTests(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     } catch (e) {

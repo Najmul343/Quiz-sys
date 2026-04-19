@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../../lib/firebase';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, doc, getDoc } from 'firebase/firestore';
 import { motion } from 'framer-motion';
 import { 
   BarChart3, 
@@ -14,9 +14,21 @@ import {
   Search,
   Filter,
   ShieldCheck,
-  AlertTriangle
+  AlertTriangle,
+  LineChart as LineChartIcon
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { 
+  LineChart, 
+  Line, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer,
+  AreaChart,
+  Area
+} from 'recharts';
 
 export default function TeacherReports() {
   const [submissions, setSubmissions] = useState<any[]>([]);
@@ -30,17 +42,28 @@ export default function TeacherReports() {
 
   const fetchData = async () => {
     try {
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+      const userData = userDoc.data();
+      const collegeId = userData?.collegeId;
+
+      if (!collegeId) return;
+
       // 1. Fetch tests by this teacher
-      const testsQ = query(collection(db, 'tests'), where('teacherId', '==', auth.currentUser?.uid));
+      const testsQ = query(collection(db, 'tests'), where('teacherId', '==', auth.currentUser?.uid), where('collegeId', '==', collegeId));
       const testSnap = await getDocs(testsQ);
       const testList = testSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setTests(testList);
 
-      // 2. Fetch all submissions for these tests
-      const subQ = query(collection(db, 'submissions'), orderBy('submittedAt', 'desc'));
+      // 2. Fetch all submissions for this college
+      const subQ = query(
+        collection(db, 'submissions'), 
+        where('collegeId', '==', collegeId),
+        orderBy('submittedAt', 'desc')
+      );
       const subSnap = await getDocs(subQ);
-      // Filter client-side if needed or use better queries
       const allSubs = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      
+      // Filter to only show responses for current teacher's tests
       const teacherSubs = allSubs.filter((s: any) => testList.some((t: any) => t.id === s.testId));
       setSubmissions(teacherSubs);
       
@@ -60,6 +83,21 @@ export default function TeacherReports() {
     totalStudents: new Set(filteredSubs.map(s => s.studentId)).size,
     passRate: filteredSubs.length ? ((filteredSubs.filter(s => s.status === 'PASS').length / filteredSubs.length) * 100).toFixed(1) : 0
   };
+
+  const chartData = filteredSubs
+    .slice()
+    .sort((a, b) => (a.submittedAt?.seconds || 0) - (b.submittedAt?.seconds || 0))
+    .reduce((acc: any[], sub) => {
+      const date = sub.submittedAt?.toDate().toLocaleDateString() || 'N/A';
+      const existing = acc.find(d => d.date === date);
+      if (existing) {
+        existing.score = Math.round((existing.score + (sub.score / sub.total) * 100) / 2);
+      } else {
+        acc.push({ date, score: Math.round((sub.score / sub.total) * 100) });
+      }
+      return acc;
+    }, [])
+    .slice(-10);
 
   if (loading) return <div className="h-64 flex items-center justify-center"><Loader2 className="animate-spin text-indigo-600" /></div>;
 
@@ -108,6 +146,56 @@ export default function TeacherReports() {
              <h4 className="text-4xl font-black text-slate-900 tracking-tighter italic">{kpi.value}</h4>
           </motion.div>
         ))}
+      </div>
+
+      {/* Analysis Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-slate-200/50">
+          <div className="flex justify-between items-center mb-10">
+            <h3 className="text-xl font-black uppercase tracking-tight text-slate-800">Growth Velocity</h3>
+            <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600">
+               <TrendingUp size={20} />
+            </div>
+          </div>
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData}>
+                <defs>
+                  <linearGradient id="colorScore" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#4F46E5" stopOpacity={0.1}/>
+                    <stop offset="95%" stopColor="#4F46E5" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                <XAxis dataKey="date" hide />
+                <YAxis hide domain={[0, 100]} />
+                <Tooltip 
+                  contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                  labelStyle={{ fontWeight: '900', textTransform: 'uppercase', fontSize: '10px' }}
+                />
+                <Area type="monotone" dataKey="score" stroke="#4F46E5" fillOpacity={1} fill="url(#colorScore)" strokeWidth={4} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border-none p-10 rounded-[3rem] shadow-2xl relative overflow-hidden group">
+           <div className="absolute top-0 right-0 p-12 opacity-10 text-white group-hover:scale-110 transition-transform duration-700">
+              <ShieldCheck size={180} strokeWidth={1} />
+           </div>
+           <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-4">Integrity Synopsis</p>
+           <h3 className="text-3xl font-black text-white uppercase tracking-tighter mb-8 italic leading-tight">Secured Session<br/>Analysis</h3>
+           <div className="space-y-4 relative z-10">
+              <div className="flex items-center gap-4 text-white/60">
+                 <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                 <span className="text-xs font-bold">{Math.round((filteredSubs.filter(s => (s.violations?.tabSwitches || 0) === 0).length / (filteredSubs.length || 1)) * 100)}% Integrity Compliance</span>
+              </div>
+              <div className="flex items-center gap-4 text-white/60">
+                 <div className="w-2 h-2 rounded-full bg-amber-500" />
+                 <span className="text-xs font-bold">{filteredSubs.filter(s => (s.violations?.tabSwitches || 0) > 0).length} Suspected Anomalies</span>
+              </div>
+           </div>
+        </div>
       </div>
 
       {/* Detailed Table */}

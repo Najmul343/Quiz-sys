@@ -12,25 +12,28 @@ service cloud.firestore {
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
     
-    // Auth Data Helper 
-    function getUserData() {
+    // Auth Data Helper (Safer version)
+    function peekUserData() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
     
     function isSuperAdmin() {
-      return isSignedIn() && (getUserData().role == 'superadmin' || request.auth.token.email == 'thenajmulhuda@gmail.com');
+      return isSignedIn() && (
+        request.auth.token.email == 'thenajmulhuda@gmail.com' || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && peekUserData().role == 'superadmin')
+      );
     }
     
     function isPrincipal(collegeId) {
-      return isSignedIn() && getUserData().role == 'principal' && getUserData().collegeId == collegeId;
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && peekUserData().role == 'principal' && peekUserData().collegeId == collegeId;
     }
     
     function isTeacher() {
-      return isSignedIn() && getUserData().role == 'teacher';
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && peekUserData().role == 'teacher';
     }
 
     function isCollegeMember(collegeId) {
-       return isSignedIn() && getUserData().collegeId == collegeId;
+       return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && peekUserData().collegeId == collegeId;
     }
     
     function isOwner(userId) {
@@ -62,19 +65,19 @@ service cloud.firestore {
                data.createdAt is timestamp;
       }
 
-      allow get: if isSignedIn() && (isOwner(userId) || isSuperAdmin() || (isPrincipal(getUserData().collegeId) && existing().collegeId == getUserData().collegeId));
-      allow list: if isSuperAdmin() || (isSignedIn() && ((resource.data.collegeId != null && isPrincipal(resource.data.collegeId)) || isTeacher()));
+      allow get: if isSignedIn() && (isOwner(userId) || isSuperAdmin() || existing().email == request.auth.token.email || (isPrincipal(peekUserData().collegeId) && existing().collegeId == peekUserData().collegeId));
+      allow list: if isSuperAdmin() || (isSignedIn() && (resource.data.email == request.auth.token.email || (resource.data.collegeId != null && isPrincipal(resource.data.collegeId)) || isTeacher()));
       
       allow create: if (isSignedIn() && (isOwner(userId) || isSuperAdmin() || isPrincipal(incoming().collegeId) || isTeacher())) && 
                        isValidUser(incoming());
       
-      allow update: if isSignedIn() && (isOwner(userId) || isSuperAdmin() || isPrincipal(existing().collegeId)) && (
+      allow update: if isSignedIn() && (isOwner(userId) || isSuperAdmin() || (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && isPrincipal(peekUserData().collegeId))) && (
         isSuperAdmin() || 
-        (isPrincipal(existing().collegeId) && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'classId', 'status'])) ||
+        (isPrincipal(peekUserData().collegeId) && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'classId', 'status'])) ||
         (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'trade', 'rollNo', 'imageUrl']) && incoming().role == existing().role)
       );
 
-      allow delete: if isSuperAdmin();
+      allow delete: if isSuperAdmin() || (isSignedIn() && existing().email == request.auth.token.email);
     }
 
     // --- Question Rules ---

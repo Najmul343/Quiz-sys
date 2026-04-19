@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../../lib/firebase';
-import { collection, query, getDocs, addDoc, serverTimestamp, orderBy, deleteDoc, doc, setDoc } from 'firebase/firestore';
+import { collection, query, getDocs, addDoc, serverTimestamp, orderBy, deleteDoc, doc, setDoc, where, getDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, BrainCircuit, Search, Loader2, CheckCircle2, Trash2, BookOpen, LayoutDashboard, ShieldCheck, Edit3 } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -41,7 +41,17 @@ export default function QuestionBank() {
   const fetchQuestions = async () => {
     setLoading(true);
     try {
-      const q = query(collection(db, 'questions'), orderBy('createdAt', 'desc'));
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+      const userData = userDoc.data();
+      const collegeId = userData?.collegeId;
+
+      if (!collegeId) return;
+
+      const q = query(
+        collection(db, 'questions'), 
+        where('collegeId', '==', collegeId),
+        orderBy('createdAt', 'desc')
+      );
       const snap = await getDocs(q);
       setQuestions(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     } catch (e) {
@@ -55,8 +65,13 @@ export default function QuestionBank() {
     if (!form.text || !form.subject || !form.chapter) return;
     setSavingManual(true);
     try {
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+      const userData = userDoc.data();
+      const collegeId = userData?.collegeId;
+
       const data = {
         ...form,
+        collegeId,
         updatedAt: serverTimestamp(),
         createdAt: editingQuestion ? undefined : serverTimestamp(),
         createdBy: auth.currentUser?.uid
@@ -108,12 +123,17 @@ export default function QuestionBank() {
     if (!aiTopic) return;
     setIsGenerating(true);
     try {
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+      const userData = userDoc.data();
+      const collegeId = userData?.collegeId;
+
       const questionsData = await generateQuestionsAI(aiSubject, aiTopic, aiDiff, aiCount);
       
       // Batch save to Firestore
       for (const q of questionsData) {
         await addDoc(collection(db, 'questions'), {
           ...q,
+          collegeId,
           subject: aiSubject,
           chapter: aiTopic.slice(0, 20), // Use topic as chapter name for AI gen
           createdAt: serverTimestamp(),

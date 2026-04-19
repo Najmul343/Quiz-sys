@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { auth, db } from '../lib/firebase';
 import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs, updateDoc, deleteDoc } from 'firebase/firestore';
 import { motion } from 'framer-motion';
 import { LogIn, ShieldCheck, GraduationCap, School, Loader2 } from 'lucide-react';
 
@@ -17,19 +17,59 @@ export default function LoginPage() {
       const result = await signInWithPopup(auth, provider);
       const user = result.user;
 
-      // Check if user exists in Firestore
-      const userRef = doc(db, 'users', user.uid);
-      const userSnap = await getDoc(userRef);
-
-      if (!userSnap.exists()) {
-        // Register as student by default if new
+      // Special SuperAdmin bypass for thenajmulhuda@gmail.com
+      if (user.email === 'thenajmulhuda@gmail.com') {
+        const userRef = doc(db, 'users', user.uid);
         await setDoc(userRef, {
           uid: user.uid,
           email: user.email,
           displayName: user.displayName,
-          role: 'student',
-          createdAt: serverTimestamp(),
-        });
+          role: 'superadmin',
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+        setLoading(false);
+        window.location.href = '/';
+        return;
+      }
+
+      // Check if user is pre-registered in 'users' collection by email
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('email', '==', user.email));
+      const snap = await getDocs(q);
+
+      if (snap.empty) {
+        // User not pre-registered - REJECT
+        await auth.signOut();
+        setError("Access Denied: Your email is not registered in our institutional records. Please contact your college administrator.");
+      } else {
+        // User exists - Link UID and ensure doc ID is UID
+        const existingDoc = snap.docs[0];
+        const existingData = existingDoc.data();
+        
+        // If the document ID is not the UID, we migrate it
+        if (existingDoc.id !== user.uid) {
+          // Create new document with UID as key
+          await setDoc(doc(db, 'users', user.uid), {
+            ...existingData,
+            uid: user.uid,
+            displayName: user.displayName || existingData.displayName,
+            updatedAt: serverTimestamp(),
+          });
+          
+          // Delete the old stub document
+          await deleteDoc(doc(db, 'users', existingDoc.id));
+        } else {
+          // Document already has correct ID, just update fields
+          await updateDoc(doc(db, 'users', user.uid), {
+            uid: user.uid,
+            displayName: user.displayName || existingData.displayName,
+            updatedAt: serverTimestamp(),
+          });
+        }
+        
+        // THE FIX: Explicitly navigate to root after migration
+        // This gives Firestore a moment to propagate and triggers App.tsx to see the new doc if it re-renders
+        window.location.href = '/'; 
       }
     } catch (err: any) {
       setError(err.message);
