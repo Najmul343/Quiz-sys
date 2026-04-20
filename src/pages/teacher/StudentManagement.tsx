@@ -16,7 +16,9 @@ import {
   Plus,
   Edit2,
   CheckCircle2,
-  X
+  X,
+  AlertTriangle,
+  UserCheck
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -28,6 +30,15 @@ export default function StudentManagement() {
   const [newStudent, setNewStudent] = useState({ name: '', email: '', rollNo: '', trade: '' });
   const [saving, setSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [status, setStatus] = useState<{type: 'success' | 'error', message: string} | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (status) {
+      const timer = setTimeout(() => setStatus(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [status]);
 
   useEffect(() => {
     fetchStudents();
@@ -57,27 +68,41 @@ export default function StudentManagement() {
       });
 
       setStudents(list);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      setStatus({ type: 'error', message: "Failed to fetch student database." });
     } finally {
       setLoading(false);
     }
   };
 
   const handleAddStudent = async () => {
-    if (!newStudent.name || !newStudent.email) return;
+    if (!newStudent.name || !newStudent.email) {
+      setStatus({ type: 'error', message: "Identity credentials incomplete." });
+      return;
+    }
     setSaving(true);
+    setStatus(null);
     try {
       const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
       const userData = userDoc.data();
       const collegeId = userData?.collegeId;
 
+      const cleanEmail = newStudent.email.toLowerCase().trim();
+
+      // Check if email already exists
+      const existingQ = query(collection(db, 'users'), where('email', '==', cleanEmail));
+      const existingSnap = await getDocs(existingQ);
+      if (!existingSnap.empty) {
+        throw new Error("Student with this email is already registered in the system.");
+      }
+
       // Create a user record stub
-      const studentId = newStudent.email.replace(/[^a-zA-Z0-9]/g, '_');
+      const studentId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '_');
       await setDoc(doc(db, 'users', studentId), {
         displayName: newStudent.name,
-        officialName: newStudent.name, // Use this for all official records
-        email: newStudent.email,
+        officialName: newStudent.name,
+        email: cleanEmail,
         rollNo: newStudent.rollNo,
         trade: newStudent.trade,
         role: 'student',
@@ -88,43 +113,89 @@ export default function StudentManagement() {
 
       setShowModal(false);
       setNewStudent({ name: '', email: '', rollNo: '', trade: '' });
+      setStatus({ type: 'success', message: `Student ${newStudent.name} enrolled successfully.` });
       fetchStudents();
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      setStatus({ type: 'error', message: e.message || "Enrollment failed." });
     } finally {
       setSaving(false);
     }
   };
 
   const handleUpdateStudent = async () => {
-    if (!editingStudent || !editingStudent.officialName) return;
+    if (!editingStudent || !editingStudent.officialName) {
+      setStatus({ type: 'error', message: "Update parameters invalid." });
+      return;
+    }
     setSaving(true);
+    setStatus(null);
     try {
-      const { id, ...updateData } = editingStudent;
-      await updateDoc(doc(db, 'users', id), {
-        ...updateData,
-        displayName: editingStudent.officialName, // Sync display name for login consistency
-        updatedAt: serverTimestamp()
-      });
+      const cleanEmail = editingStudent.email.toLowerCase().trim();
+      const newId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '_');
+      const isMigrated = !!editingStudent.uid;
+
+      // Check for email collision if email changed
+      if (cleanEmail !== students.find(s => s.id === editingStudent.id)?.email) {
+        const collisionQ = query(collection(db, 'users'), where('email', '==', cleanEmail));
+        const collisionSnap = await getDocs(collisionQ);
+        if (!collisionSnap.empty) {
+          throw new Error("Student with this email already exists in the registry.");
+        }
+      }
+
+      if (isMigrated) {
+        // Just update existing UID document
+        await updateDoc(doc(db, 'users', editingStudent.id), {
+          officialName: editingStudent.officialName,
+          displayName: editingStudent.officialName,
+          email: cleanEmail,
+          rollNo: editingStudent.rollNo,
+          trade: editingStudent.trade,
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        // Stub phase - handle ID re-mapping if email changed
+        const studentData = {
+          officialName: editingStudent.officialName,
+          displayName: editingStudent.officialName,
+          email: cleanEmail,
+          rollNo: editingStudent.rollNo,
+          trade: editingStudent.trade,
+          role: 'student',
+          collegeId: editingStudent.collegeId,
+          addedBy: editingStudent.addedBy || auth.currentUser?.uid,
+          createdAt: editingStudent.createdAt || serverTimestamp(),
+          updatedAt: serverTimestamp()
+        };
+
+        await setDoc(doc(db, 'users', newId), studentData, { merge: true });
+
+        if (editingStudent.id !== newId) {
+          await deleteDoc(doc(db, 'users', editingStudent.id));
+        }
+      }
 
       setEditingStudent(null);
+      setStatus({ type: 'success', message: "Student record synchronized successfully." });
       fetchStudents();
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert("Error updating student. Make sure you have permission.");
+      setStatus({ type: 'error', message: e.message || "Synchronisation failed. Verify permissions." });
     } finally {
       setSaving(false);
     }
   };
 
   const handleDeleteStudent = async (id: string) => {
-    if (!confirm("Are you sure you want to remove this student? All association with the college will be terminated.")) return;
     try {
       await deleteDoc(doc(db, 'users', id));
+      setStatus({ type: 'success', message: "Identity purged from central registry." });
+      setConfirmDelete(null);
       fetchStudents();
     } catch (e) {
       console.error(e);
-      alert("Removal failed. Verify administrative permissions.");
+      setStatus({ type: 'error', message: "Purge failed. Administrative override required." });
     }
   };
 
@@ -165,6 +236,23 @@ export default function StudentManagement() {
         />
       </div>
 
+      <AnimatePresence>
+        {status && (
+          <motion.div 
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className={cn(
+              "p-6 rounded-[2rem] border font-black uppercase tracking-widest text-[10px] flex items-center gap-4",
+              status.type === 'success' ? "bg-emerald-50 border-emerald-100 text-emerald-600" : "bg-rose-50 border-rose-100 text-rose-600"
+            )}
+          >
+            {status.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+            {status.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Student List */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {filteredStudents.map((student) => (
@@ -192,12 +280,31 @@ export default function StudentManagement() {
                           <Edit2 size={20} />
                         </button>
                         <button 
-                          onClick={() => handleDeleteStudent(student.id)}
+                          onClick={() => setConfirmDelete(student.id)}
                           className="p-3 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-2xl transition-all"
                         >
                            <Trash2 size={20} />
                         </button>
                      </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 mb-4">
+                      {student.uid ? (
+                        <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-600 rounded-lg text-[9px] font-black uppercase tracking-widest border border-emerald-100">
+                          <UserCheck size={12} />
+                          Active Identity
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-600 rounded-lg text-[9px] font-black uppercase tracking-widest border border-amber-100">
+                          <Loader2 size={12} className="animate-spin" />
+                          Pending Login
+                        </div>
+                      )}
+                      {student.trade && (
+                        <div className="px-3 py-1 bg-slate-50 text-slate-500 rounded-lg text-[9px] font-black uppercase tracking-widest border border-slate-100">
+                          {student.trade}
+                        </div>
+                      )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
@@ -247,9 +354,9 @@ export default function StudentManagement() {
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Official Full Name</label>
                   <input 
                     type="text" 
-                    value={editingStudent ? editingStudent.officialName : newStudent.name}
+                    value={editingStudent ? (editingStudent.officialName || editingStudent.displayName || '') : newStudent.name}
                     onChange={e => editingStudent 
-                      ? setEditingStudent({...editingStudent, officialName: e.target.value})
+                      ? setEditingStudent({...editingStudent, officialName: e.target.value, displayName: e.target.value})
                       : setNewStudent({...newStudent, name: e.target.value})
                     }
                     placeholder="Full Legal Name"
@@ -257,15 +364,20 @@ export default function StudentManagement() {
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Registration Email</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Registration Email {editingStudent && '(Sync ID)'}</label>
                   <input 
                     type="email" 
-                    disabled={!!editingStudent}
                     value={editingStudent ? editingStudent.email : newStudent.email}
-                    onChange={e => setNewStudent({...newStudent, email: e.target.value})}
+                    onChange={e => editingStudent
+                      ? setEditingStudent({...editingStudent, email: e.target.value})
+                      : setNewStudent({...newStudent, email: e.target.value})
+                    }
                     placeholder="student@college.edu"
-                    className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-blue-600 rounded-2xl outline-none font-bold transition-all disabled:opacity-50"
+                    className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-blue-600 rounded-2xl outline-none font-bold transition-all"
                   />
+                  {editingStudent && (
+                    <p className="text-[9px] text-slate-400 font-bold mt-2 italic px-2">Changing email will re-map the registration stub.</p>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -316,6 +428,48 @@ export default function StudentManagement() {
             </motion.div>
           </div>
         )}
+
+        <AnimatePresence>
+          {confirmDelete && (
+            <div className="fixed inset-0 z-[110] flex items-center justify-center p-6">
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setConfirmDelete(null)}
+                className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
+              />
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-white w-full max-w-sm rounded-[3rem] p-10 relative shadow-2xl text-center"
+              >
+                <div className="w-20 h-20 bg-rose-50 text-rose-600 rounded-[2rem] flex items-center justify-center mx-auto mb-6">
+                  <Trash2 size={40} />
+                </div>
+                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight mb-2">Confirm Purge</h3>
+                <p className="text-[11px] text-slate-500 font-bold uppercase tracking-widest leading-relaxed mb-8">
+                  You are about to permanently remove this identity from the institutional registry. All associated metadata will be orphaned.
+                </p>
+                <div className="grid grid-cols-2 gap-4">
+                  <button 
+                    onClick={() => setConfirmDelete(null)}
+                    className="py-4 px-6 bg-slate-50 text-slate-400 font-black rounded-2xl text-[10px] uppercase tracking-widest hover:bg-slate-100 transition-all border border-slate-100"
+                  >
+                    Abstain
+                  </button>
+                  <button 
+                    onClick={() => handleDeleteStudent(confirmDelete)}
+                    className="py-4 px-6 bg-rose-600 text-white font-black rounded-2xl text-[10px] uppercase tracking-widest hover:bg-rose-700 transition-all shadow-lg shadow-rose-100"
+                  >
+                    Verify Purge
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </AnimatePresence>
     </div>
   );

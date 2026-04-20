@@ -32,6 +32,10 @@ service cloud.firestore {
       return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && peekUserData().role == 'teacher';
     }
 
+    function isTeacherAt(collegeId) {
+      return isTeacher() && peekUserData().collegeId == collegeId;
+    }
+
     function isCollegeMember(collegeId) {
        return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && peekUserData().collegeId == collegeId;
     }
@@ -61,23 +65,22 @@ service cloud.firestore {
     match /users/{userId} {
       function isValidUser(data) {
         return data.email is string && data.email.size() > 0 &&
-               data.role in ['superadmin', 'principal', 'teacher', 'student'] &&
-               data.createdAt is timestamp;
+               data.role in ['superadmin', 'principal', 'teacher', 'student'];
       }
 
       allow get: if isSignedIn() && (isOwner(userId) || isSuperAdmin() || existing().email == request.auth.token.email || (isPrincipal(peekUserData().collegeId) && existing().collegeId == peekUserData().collegeId));
       allow list: if isSuperAdmin() || (isSignedIn() && (resource.data.email == request.auth.token.email || (resource.data.collegeId != null && isPrincipal(resource.data.collegeId)) || isTeacher()));
       
-      allow create: if (isSignedIn() && (isOwner(userId) || isSuperAdmin() || isPrincipal(incoming().collegeId) || isTeacher())) && 
-                       isValidUser(incoming());
+      allow create: if (isSignedIn() && (isOwner(userId) || isSuperAdmin() || isPrincipal(incoming().collegeId) || isTeacherAt(incoming().collegeId))) && 
+                       isValidUser(incoming()) && incoming().createdAt is timestamp;
       
-      allow update: if isSignedIn() && (isOwner(userId) || isSuperAdmin() || (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && isPrincipal(peekUserData().collegeId))) && (
+      allow update: if isSignedIn() && (isOwner(userId) || isSuperAdmin() || (isPrincipal(peekUserData().collegeId) || isTeacherAt(peekUserData().collegeId)) && existing().collegeId == peekUserData().collegeId) && (
         isSuperAdmin() || 
-        (isPrincipal(peekUserData().collegeId) && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'classId', 'status'])) ||
+        ((isPrincipal(peekUserData().collegeId) || isTeacherAt(peekUserData().collegeId)) && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'classId', 'status', 'officialName', 'displayName', 'rollNo', 'trade', 'email', 'updatedAt', 'collegeId', 'imageUrl'])) ||
         (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'trade', 'rollNo', 'imageUrl']) && incoming().role == existing().role)
       );
 
-      allow delete: if isSuperAdmin() || (isSignedIn() && existing().email == request.auth.token.email);
+      allow delete: if isSuperAdmin() || (isSignedIn() && (existing().email == request.auth.token.email || isPrincipal(existing().collegeId) || isTeacherAt(existing().collegeId)));
     }
 
     // --- Question Rules ---
@@ -91,9 +94,9 @@ service cloud.firestore {
       }
 
       allow read: if isSignedIn();
-      allow create: if (isTeacher() || isPrincipal(incoming().collegeId)) && isValidQuestion(incoming());
-      allow update: if (isSuperAdmin() || (isSignedIn() && (existing().createdBy == request.auth.uid || isPrincipal(existing().collegeId)))) && isValidQuestion(incoming());
-      allow delete: if isSuperAdmin() || (isSignedIn() && (existing().createdBy == request.auth.uid || isPrincipal(existing().collegeId)));
+      allow create: if (isPrincipal(incoming().collegeId) || isTeacherAt(incoming().collegeId)) && isValidQuestion(incoming());
+      allow update: if (isSuperAdmin() || (isSignedIn() && (isPrincipal(existing().collegeId) || (isTeacherAt(existing().collegeId) && existing().createdBy == request.auth.uid)))) && isValidQuestion(incoming());
+      allow delete: if isSuperAdmin() || (isSignedIn() && (isPrincipal(existing().collegeId) || (isTeacherAt(existing().collegeId) && existing().createdBy == request.auth.uid)));
     }
 
     // --- Test Rules ---
@@ -106,9 +109,9 @@ service cloud.firestore {
       }
 
       allow read: if isSignedIn();
-      allow create: if (isTeacher() || isPrincipal(incoming().collegeId)) && isValidTest(incoming()) && (incoming().teacherId == request.auth.uid || isPrincipal(incoming().collegeId));
-      allow update: if (isSuperAdmin() || isPrincipal(existing().collegeId) || (isTeacher() && existing().teacherId == request.auth.uid)) && isValidTest(incoming());
-      allow delete: if isSuperAdmin() || isPrincipal(existing().collegeId) || (isTeacher() && existing().teacherId == request.auth.uid);
+      allow create: if (isPrincipal(incoming().collegeId) || isTeacherAt(incoming().collegeId)) && isValidTest(incoming()) && (incoming().teacherId == request.auth.uid || isPrincipal(incoming().collegeId));
+      allow update: if (isSuperAdmin() || isPrincipal(existing().collegeId) || (isTeacherAt(existing().collegeId) && existing().teacherId == request.auth.uid)) && isValidTest(incoming());
+      allow delete: if isSuperAdmin() || isPrincipal(existing().collegeId) || (isTeacherAt(existing().collegeId) && existing().teacherId == request.auth.uid);
     }
 
     // --- Submission Rules ---
@@ -120,12 +123,12 @@ service cloud.firestore {
                data.submittedAt is timestamp;
       }
 
-      allow get: if isSignedIn() && (isOwner(existing().studentId) || isTeacher() || isSuperAdmin() || isPrincipal(existing().collegeId));
-      allow list: if isSuperAdmin() || isTeacher() || (isSignedIn() && (isPrincipal(resource.data.collegeId) || resource.data.studentId == request.auth.uid));
+      allow get: if isSignedIn() && (isOwner(existing().studentId) || isSuperAdmin() || isPrincipal(existing().collegeId) || isTeacherAt(existing().collegeId));
+      allow list: if isSuperAdmin() || (isSignedIn() && (isPrincipal(resource.data.collegeId) || isTeacherAt(resource.data.collegeId) || resource.data.studentId == request.auth.uid));
       
       allow create: if isSignedIn() && isValidSubmission(incoming()) && (incoming().studentId == request.auth.uid || incoming().studentId == 'anonymous');
       
-      allow update: if (isSuperAdmin() || isPrincipal(existing().collegeId) || isTeacher()) && 
+      allow update: if (isSuperAdmin() || isPrincipal(existing().collegeId) || isTeacherAt(existing().collegeId)) && 
                     incoming().diff(existing()).affectedKeys().hasOnly(['released']);
       
       allow delete: if isSuperAdmin();

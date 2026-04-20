@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../lib/firebase';
-import { collection, query, getDocs, addDoc, serverTimestamp, doc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
+import { collection, query, getDocs, addDoc, serverTimestamp, doc, updateDoc, deleteDoc, setDoc, orderBy, where } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Building2, 
@@ -14,7 +14,9 @@ import {
   LogOut,
   Mail,
   User as UserIcon,
-  LayoutDashboard
+  LayoutDashboard,
+  CheckCircle2,
+  AlertTriangle
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { signOut } from 'firebase/auth';
@@ -27,7 +29,16 @@ export default function SuperAdminDashboard() {
   const [showModal, setShowModal] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [newCollege, setNewCollege] = useState({ name: '', location: '', principalEmail: '', principalName: '' });
+  const [editingCollege, setEditingCollege] = useState<any>(null);
   const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<{type: 'success' | 'error', message: string} | null>(null);
+
+  useEffect(() => {
+    if (status) {
+      const timer = setTimeout(() => setStatus(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [status]);
 
   useEffect(() => {
     fetchColleges();
@@ -35,48 +46,127 @@ export default function SuperAdminDashboard() {
 
   const fetchColleges = async () => {
     try {
-      const q = query(collection(db, 'colleges'));
+      const q = query(collection(db, 'colleges'), orderBy('createdAt', 'desc'));
       const snap = await getDocs(q);
       setColleges(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     } catch (e) {
       console.error(e);
+      setStatus({ type: 'error', message: "Global registry access failure." });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCreateCollege = async () => {
-    if (!newCollege.name || !newCollege.principalEmail) return;
+  const handleSaveCollege = async () => {
+    if (!newCollege.name || !newCollege.principalEmail) {
+      setStatus({ type: 'error', message: "Incomplete institutional metadata." });
+      return;
+    }
     setSaving(true);
+    setStatus(null);
     try {
-      // 1. Create College
-      const collegeRef = await addDoc(collection(db, 'colleges'), {
-        name: newCollege.name,
-        location: newCollege.location,
-        principalEmail: newCollege.principalEmail,
-        principalName: newCollege.principalName,
-        createdAt: serverTimestamp()
-      });
+      const cleanEmail = newCollege.principalEmail.toLowerCase().trim();
+      const principalId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '_');
+      
+      if (editingCollege) {
+        // Check collision if email changed
+        if (cleanEmail !== editingCollege.principalEmail) {
+           const exQ = query(collection(db, 'users'), where('email', '==', cleanEmail));
+           const exSnap = await getDocs(exQ);
+           if (!exSnap.empty) throw new Error("Principal email is already registered in the ecosystem.");
+        }
 
-      // 2. Create/Update Principal user record stub
-      const principalId = newCollege.principalEmail.replace(/[^a-zA-Z0-9]/g, '_');
-      await setDoc(doc(db, 'users', principalId), {
-        displayName: newCollege.principalName,
-        email: newCollege.principalEmail,
-        role: 'principal',
-        collegeId: collegeRef.id,
-        createdAt: serverTimestamp()
-      });
+        // Fetch existing principal record to check migration
+        let existingUser: any = null;
+        const oldPrincipalQ = query(collection(db, 'users'), where('email', '==', editingCollege.principalEmail));
+        const oldSnap = await getDocs(oldPrincipalQ);
+        if (!oldSnap.empty) {
+          existingUser = { id: oldSnap.docs[0].id, ...oldSnap.docs[0].data() };
+        }
+
+        // Update College
+        await updateDoc(doc(db, 'colleges', editingCollege.id), {
+          name: newCollege.name,
+          location: newCollege.location,
+          principalEmail: cleanEmail,
+          principalName: newCollege.principalName,
+          updatedAt: serverTimestamp()
+        });
+
+        // Update Principal user record
+        if (existingUser?.uid) {
+           await updateDoc(doc(db, 'users', existingUser.uid), {
+             displayName: newCollege.principalName,
+             officialName: newCollege.principalName,
+             email: cleanEmail,
+             collegeId: editingCollege.id,
+             updatedAt: serverTimestamp()
+           });
+        } else {
+           await setDoc(doc(db, 'users', principalId), {
+             displayName: newCollege.principalName,
+             officialName: newCollege.principalName,
+             email: cleanEmail,
+             role: 'principal',
+             collegeId: editingCollege.id,
+             createdAt: (existingUser && existingUser.createdAt) || serverTimestamp(),
+             updatedAt: serverTimestamp()
+           }, { merge: true });
+
+           if (existingUser && existingUser.id !== principalId) {
+             await deleteDoc(doc(db, 'users', existingUser.id));
+           }
+        }
+        
+        setStatus({ type: 'success', message: "Institutional parameters synchronized." });
+      } else {
+        // Check collision
+        const exQ = query(collection(db, 'users'), where('email', '==', cleanEmail));
+        const exSnap = await getDocs(exQ);
+        if (!exSnap.empty) throw new Error("Principal email is already registered in the ecosystem.");
+
+        // Create College
+        const collegeRef = await addDoc(collection(db, 'colleges'), {
+          name: newCollege.name,
+          location: newCollege.location,
+          principalEmail: cleanEmail,
+          principalName: newCollege.principalName,
+          createdAt: serverTimestamp()
+        });
+
+        // Create Principal user record stub
+        await setDoc(doc(db, 'users', principalId), {
+          displayName: newCollege.principalName,
+          officialName: newCollege.principalName,
+          email: cleanEmail,
+          role: 'principal',
+          collegeId: collegeRef.id,
+          createdAt: serverTimestamp()
+        });
+        setStatus({ type: 'success', message: "New institution activated globally." });
+      }
       
       setShowModal(false);
+      setEditingCollege(null);
       setNewCollege({ name: '', location: '', principalEmail: '', principalName: '' });
       fetchColleges();
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert("Registration failed. Check connectivity.");
+      setStatus({ type: 'error', message: e.message || "Activation sequence failed." });
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleEdit = (college: any) => {
+    setEditingCollege(college);
+    setNewCollege({
+      name: college.name,
+      location: college.location,
+      principalEmail: college.principalEmail,
+      principalName: college.principalName
+    });
+    setShowModal(true);
   };
 
   const handleDelete = async () => {
@@ -134,6 +224,23 @@ export default function SuperAdminDashboard() {
           </button>
         </div>
 
+        <AnimatePresence>
+          {status && (
+            <motion.div 
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className={cn(
+                "p-6 rounded-[2rem] border font-black uppercase tracking-widest text-[10px] flex items-center gap-4 shadow-xl shadow-slate-100",
+                status.type === 'success' ? "bg-emerald-50 border-emerald-100 text-emerald-600" : "bg-rose-50 border-rose-100 text-rose-600"
+              )}
+            >
+              {status.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+              {status.message}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Stats Row */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/50">
@@ -172,13 +279,21 @@ export default function SuperAdminDashboard() {
                     <div className="w-16 h-16 bg-slate-50 rounded-3xl flex items-center justify-center text-slate-400 group-hover:bg-purple-50 group-hover:text-purple-600 transition-all border border-slate-100">
                       <School size={32} />
                     </div>
-                  <button 
-                    onClick={() => setConfirmDelete(college.id)}
-                    className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all"
-                  >
-                    <Trash2 size={20} />
-                  </button>
-                </div>
+                    <div className="flex gap-2">
+                       <button 
+                         onClick={() => handleEdit(college)}
+                         className="p-3 text-slate-300 hover:text-purple-600 hover:bg-purple-50 rounded-2xl transition-all"
+                       >
+                         <Plus size={20} className="rotate-45" />
+                       </button>
+                       <button 
+                         onClick={() => setConfirmDelete(college.id)}
+                         className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all"
+                       >
+                         <Trash2 size={20} />
+                       </button>
+                    </div>
+                 </div>
 
                 <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tight mb-2">{college.name}</h3>
                 <p className="text-slate-500 font-bold mb-8 flex items-center gap-2">
@@ -272,7 +387,9 @@ export default function SuperAdminDashboard() {
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
               className="bg-white w-full max-w-xl rounded-[3rem] shadow-2xl relative overflow-hidden p-12"
             >
-              <h2 className="text-3xl font-black text-slate-900 uppercase tracking-tighter mb-8 italic">Register Institution</h2>
+              <h2 className="text-3xl font-black text-slate-900 uppercase tracking-tighter mb-8 italic">
+                {editingCollege ? "Update Institution" : "Register Institution"}
+              </h2>
               
               <div className="space-y-6">
                 <div>
@@ -325,14 +442,16 @@ export default function SuperAdminDashboard() {
                   >
                     Abort
                   </button>
-                  <button 
-                    onClick={handleCreateCollege}
+                  <motion.button 
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={handleSaveCollege}
                     disabled={saving}
-                    className="flex-[2] py-5 bg-indigo-600 text-white font-black rounded-3xl flex items-center justify-center gap-4 transition-all hover:bg-slate-900 disabled:opacity-50 shadow-xl shadow-indigo-100"
+                    className="flex-[2] py-5 bg-purple-600 text-white font-black rounded-3xl flex items-center justify-center gap-4 transition-all hover:bg-slate-900 disabled:opacity-50 shadow-xl shadow-purple-100"
                   >
                     {saving ? <Loader2 className="animate-spin" /> : <ShieldCheck size={20} />}
-                    ACTIVATE INSTITUTION
-                  </button>
+                    {editingCollege ? "SAVE CHANGES" : "ACTIVATE INSTITUTION"}
+                  </motion.button>
                 </div>
               </div>
             </motion.div>

@@ -35,6 +35,7 @@
       "properties": {
         "text": { "type": "string" },
         "options": { "type": "object" },
+        "optionImages": { "type": "object" },
         "answer": { "type": "string" },
         "subject": { "type": "string" },
         "chapter": { "type": "string" },
@@ -45,6 +46,19 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["text", "options", "answer", "createdBy"]
+    },
+    "PracticeProgress": {
+      "title": "PracticeProgress",
+      "description": "Transient state for resumable practice tests.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "testId": { "type": "string" },
+        "currentIdx": { "type": "number" },
+        "answers": { "type": "object" },
+        "reviewIds": { "type": "array", "items": { "type": "string" } },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      }
     },
     "Test": {
       "title": "Test",
@@ -109,6 +123,7 @@
     "/questions/{questionId}": { "schema": "Question", "description": "Global question bank" },
     "/tests/{testId}": { "schema": "Test", "description": "Deployment configurations" },
     "/submissions/{submissionId}": { "schema": "Submission", "description": "Detailed result logs" },
+    "/practice_progress/{progressId}": { "schema": "PracticeProgress", "description": "Resumable test state" },
     "/classes/{classId}": { "schema": "Class", "description": "Institutional classroom mapping" }
   }
 }

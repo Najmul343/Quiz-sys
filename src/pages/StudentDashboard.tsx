@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { cn } from '../lib/utils';
+import MathRenderer from '../components/MathRenderer';
 
 import { 
   LineChart, 
@@ -43,6 +44,7 @@ export default function StudentDashboard() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'live' | 'history'>('live');
   const [viewingResult, setViewingResult] = useState<any>(null);
+  const [progress, setProgress] = useState<Record<string, any>>({});
   const [growthData, setGrowthData] = useState<any[]>([]);
   const [officialName, setOfficialName] = useState("");
 
@@ -59,44 +61,72 @@ export default function StudentDashboard() {
 
       if (!collegeId) return;
 
-      // 1. Fetch Active Tests
-      const testsQ = query(
-        collection(db, 'tests'), 
-        where('status', '==', 'active'),
-        where('collegeId', '==', collegeId),
-        orderBy('createdAt', 'desc')
-      );
-      const testSnap = await getDocs(testsQ);
-      setTests(testSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      // 1 & 2 Parallelized for speed
+      const [testSnap, subSnap] = await Promise.all([
+        getDocs(query(
+          collection(db, 'tests'), 
+          where('status', '==', 'active'),
+          where('collegeId', '==', collegeId),
+          orderBy('createdAt', 'desc')
+        )),
+        getDocs(query(
+          collection(db, 'submissions'),
+          where('studentId', '==', auth.currentUser?.uid),
+          orderBy('submittedAt', 'desc')
+        ))
+      ]);
 
-      // 2. Fetch Personal Submissions
-      const subQ = query(
-        collection(db, 'submissions'),
-        where('studentId', '==', auth.currentUser?.uid),
-        orderBy('submittedAt', 'desc')
-      );
-      const subSnap = await getDocs(subQ);
+      const testList = testSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+      setTests(testList);
+
       const subList = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
       setSubmissions(subList);
+
+      // 4. Fetch Progress for Practice Tests
+      if (auth.currentUser) {
+        const progSnap = await getDocs(query(collection(db, 'practice_progress'), where('studentId', '==', auth.currentUser.uid)));
+        const progMap: Record<string, any> = {};
+        progSnap.docs.forEach(d => { progMap[d.data().testId] = d.data(); });
+        setProgress(progMap);
+      }
 
       // 3. Performance Trend
       const trend = [...subList].reverse().map((s, i) => ({
         iteration: i + 1,
         score: Math.round(s.percentage || (s.score/s.total*100)),
-        title: tests.find(t => t.id === s.testId)?.title || 'Test'
+        title: testList.find(t => t.id === (s as any).testId)?.title || 'Test'
       }));
       setGrowthData(trend);
 
-      // 4. Pre-fetch relevant questions for history view
-      const qSnap = await getDocs(collection(db, 'questions'));
-      const qMap: Record<string, any> = {};
-      qSnap.docs.forEach(d => qMap[d.id] = d.data());
-      setQuestions(qMap);
+      // 4. Questions are now fetched on-demand in handleFullSheet to avoid bulk download
 
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const [loadingSheet, setLoadingSheet] = useState(false);
+
+  const handleFullSheet = async (sub: any) => {
+    setLoadingSheet(true);
+    try {
+      const qIds = Object.keys(sub.answers);
+      const missingQIds = qIds.filter(id => !questions[id]);
+      
+      if (missingQIds.length > 0) {
+        // Fetch only specific questions needed for this result
+        const qDocs = await Promise.all(missingQIds.map(id => getDoc(doc(db, 'questions', id))));
+        const newQs: Record<string, any> = { ...questions };
+        qDocs.forEach(d => { if(d.exists()) newQs[d.id] = d.data(); });
+        setQuestions(newQs);
+      }
+      setViewingResult(sub);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingSheet(false);
     }
   };
 
@@ -196,10 +226,11 @@ export default function StudentDashboard() {
 
                 <Link 
                   to={`/quiz/${test.id}`}
-                  className="z-10 w-full py-4 bg-[var(--text-main)] hover:bg-[var(--primary)] text-white font-black rounded-2xl flex items-center justify-center gap-3 transition-all shadow-xl shadow-slate-200 active:scale-[0.98] uppercase text-xs tracking-widest"
+                  className="z-10 w-full py-4 bg-[var(--text-main)] hover:bg-[var(--primary)] text-white font-black rounded-2xl flex items-center justify-center gap-3 transition-all shadow-xl shadow-slate-200 active:scale-[0.98] uppercase text-xs tracking-widest relative overflow-hidden"
                 >
-                  Enter Session
+                  {progress[test.id] ? 'Resume Attempt' : 'Enter Session'}
                   <ArrowRight size={18} />
+                  {progress[test.id] && <div className="absolute top-0 right-0 h-full w-2 bg-emerald-500" />}
                 </Link>
               </motion.div>
             ))}
@@ -291,10 +322,11 @@ export default function StudentDashboard() {
                             </span>
                             {sub.released ? (
                               <button 
-                                onClick={() => setViewingResult(sub)}
-                                className="px-6 py-2.5 bg-[var(--text-main)] text-white hover:bg-[var(--primary)] rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2"
+                                onClick={() => handleFullSheet(sub)}
+                                disabled={loadingSheet}
+                                className="px-6 py-2.5 bg-[var(--text-main)] text-white hover:bg-[var(--primary)] rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 disabled:opacity-50"
                               >
-                                <Eye size={14} /> Full Sheet
+                                {loadingSheet ? <Loader2 className="animate-spin" size={14} /> : <Eye size={14} />} Full Sheet
                               </button>
                             ) : (
                               <div className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
@@ -325,7 +357,7 @@ export default function StudentDashboard() {
                initial={{ scale: 0.9, opacity: 0, y: 30 }}
                animate={{ scale: 1, opacity: 1, y: 0 }}
                exit={{ scale: 0.9, opacity: 0, y: 30 }}
-               className="bg-white w-full max-w-2xl max-h-[85vh] rounded-[3.5rem] shadow-2xl relative overflow-hidden flex flex-col"
+               className="bg-white w-full max-w-4xl max-h-[90vh] rounded-3xl sm:rounded-[3.5rem] shadow-2xl relative overflow-hidden flex flex-col"
              >
                 <div className="bg-slate-900 p-10 text-white relative">
                    <button onClick={() => setViewingResult(null)} className="absolute top-8 right-8 text-white/40 hover:text-white transition-colors">
@@ -369,15 +401,17 @@ export default function StudentDashboard() {
                         )}
                         <div className="relative z-10">
                           <p className="text-[9px] font-black text-slate-300 uppercase mb-2">Item #{idx + 1}</p>
-                          <p className="font-bold text-slate-800 leading-tight mb-4 pr-12">{qData?.text || 'Historical data point unavailable'}</p>
+                          <MathRenderer content={qData?.text || 'Historical data point unavailable'} className="font-black text-slate-900 leading-tight mb-4 pr-12 text-lg" />
                           <div className="flex gap-8">
                              <div>
                                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Input</p>
                                 <span className={cn("px-3 py-1 rounded-lg text-xs font-black", isCorrect ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600')}>{answer}</span>
+                                {qData?.options?.[answer] && <MathRenderer content={qData.options[answer]} className="mt-2 text-[10px] font-medium opacity-70" />}
                              </div>
                              <div>
                                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Validation Key</p>
                                 <span className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-black">{qData?.answer}</span>
+                                {qData?.options?.[qData.answer] && <MathRenderer content={qData.options[qData.answer]} className="mt-2 text-[10px] font-medium opacity-70" />}
                              </div>
                           </div>
                         </div>

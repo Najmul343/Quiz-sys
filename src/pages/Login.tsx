@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { auth, db } from '../lib/firebase';
 import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs, updateDoc, deleteDoc } from 'firebase/firestore';
@@ -6,6 +7,7 @@ import { motion } from 'framer-motion';
 import { LogIn, ShieldCheck, GraduationCap, School, Loader2 } from 'lucide-react';
 
 export default function LoginPage() {
+  const navigate = useNavigate();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -28,13 +30,14 @@ export default function LoginPage() {
           updatedAt: serverTimestamp(),
         }, { merge: true });
         setLoading(false);
-        window.location.href = '/';
+        navigate('/');
         return;
       }
 
       // Check if user is pre-registered in 'users' collection by email
       const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('email', '==', user.email));
+      const cleanEmail = user.email?.toLowerCase() || '';
+      const q = query(usersRef, where('email', '==', cleanEmail));
       const snap = await getDocs(q);
 
       if (snap.empty) {
@@ -67,9 +70,8 @@ export default function LoginPage() {
           });
         }
         
-        // THE FIX: Explicitly navigate to root after migration
-        // This gives Firestore a moment to propagate and triggers App.tsx to see the new doc if it re-renders
-        window.location.href = '/'; 
+        // THE FIX: Use navigate instead of window.location.href for faster transition
+        navigate('/');
       }
     } catch (err: any) {
       setError(err.message);

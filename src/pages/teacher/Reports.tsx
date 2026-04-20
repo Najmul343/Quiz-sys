@@ -23,7 +23,8 @@ import {
   ChevronRight,
   User as UserIcon,
   X,
-  FileText
+  FileText,
+  Printer
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { 
@@ -40,6 +41,7 @@ import {
   Bar,
   Cell
 } from 'recharts';
+import MathRenderer from '../../components/MathRenderer';
 
 export default function TeacherReports() {
   const [submissions, setSubmissions] = useState<any[]>([]);
@@ -64,31 +66,51 @@ export default function TeacherReports() {
 
       if (!collegeId) return;
 
-      const testsQ = query(collection(db, 'tests'), where('teacherId', '==', auth.currentUser?.uid), where('collegeId', '==', collegeId));
-      const testSnap = await getDocs(testsQ);
+      // Parallelize queries
+      const [testSnap, subSnap] = await Promise.all([
+        getDocs(query(collection(db, 'tests'), where('teacherId', '==', auth.currentUser?.uid), where('collegeId', '==', collegeId))),
+        getDocs(query(
+          collection(db, 'submissions'), 
+          where('collegeId', '==', collegeId),
+          orderBy('submittedAt', 'desc')
+        ))
+      ]);
+
       const testList = testSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setTests(testList);
 
-      const subQ = query(
-        collection(db, 'submissions'), 
-        where('collegeId', '==', collegeId),
-        orderBy('submittedAt', 'desc')
-      );
-      const subSnap = await getDocs(subQ);
       const allSubs = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       const teacherSubs = allSubs.filter((s: any) => testList.some((t: any) => t.id === s.testId));
       setSubmissions(teacherSubs);
       
-      // Pre-fetch all questions for submission viewing
-      const qSnap = await getDocs(collection(db, 'questions'));
-      const qMap: Record<string, any> = {};
-      qSnap.docs.forEach(d => qMap[d.id] = d.data());
-      setQuestions(qMap);
-
+      // Questions are now fetched on-demand in handleViewSubmission
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const [loadingSheet, setLoadingSheet] = useState(false);
+
+  const handleViewSubmission = async (sub: any) => {
+    setLoadingSheet(true);
+    try {
+      const qIds = Object.keys(sub.answers);
+      const missingQIds = qIds.filter(id => !questions[id]);
+      
+      if (missingQIds.length > 0) {
+        // Fetch only specific questions needed
+        const qDocs = await Promise.all(missingQIds.map(id => getDoc(doc(db, 'questions', id))));
+        const newQs: Record<string, any> = { ...questions };
+        qDocs.forEach(d => { if(d.exists()) newQs[d.id] = d.data(); });
+        setQuestions(newQs);
+      }
+      setViewingSubmission(sub);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingSheet(false);
     }
   };
 
@@ -128,6 +150,14 @@ export default function TeacherReports() {
       }));
   };
 
+  const getPracticeStats = (studentId: string) => {
+    const practiceSubs = submissions.filter(s => s.studentId === studentId && s.isPractice);
+    return {
+      count: practiceSubs.length,
+      avgAttempted: practiceSubs.length ? (practiceSubs.reduce((acc, s) => acc + (s.attempted || 0), 0) / practiceSubs.length).toFixed(0) : 0
+    };
+  };
+
   const stats = {
     avgScore: filteredSubs.length ? (filteredSubs.reduce((acc, s) => acc + (s.percentage || (s.score/s.total*100)), 0) / filteredSubs.length).toFixed(1) : 0,
     totalStudents: new Set(filteredSubs.map(s => s.studentId)).size,
@@ -145,8 +175,14 @@ export default function TeacherReports() {
           <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px] mt-1">Cross-verify student assessment metrics & release sheets</p>
         </div>
         
-        <div className="flex flex-wrap gap-4 w-full md:w-auto">
-          {selectedSubs.length > 0 && (
+          <div className="flex gap-2">
+            <button 
+              onClick={() => window.print()}
+              className="px-6 py-4 bg-slate-900 text-white font-black text-[10px] uppercase tracking-widest rounded-2xl flex items-center gap-2 shadow-lg hover:bg-slate-800 transition-all"
+            >
+              <Printer size={16} /> Print Class Card
+            </button>
+            {selectedSubs.length > 0 && (
             <div className="flex gap-2">
               <button 
                 onClick={() => handleReleaseResults(selectedSubs, true)}
@@ -258,6 +294,22 @@ export default function TeacherReports() {
                       <h4 className="text-2xl font-black uppercase tracking-tighter italic text-slate-800">Growth Analysis</h4>
                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Longitudinal Performance Delta</p>
                     </div>
+                    {/* Practice Summary */}
+                    {(() => {
+                      const pStats = getPracticeStats(selectedStudentId || '');
+                      return (
+                        <div className="hidden sm:flex gap-6">
+                          <div className="text-right border-r border-slate-100 pr-6">
+                             <p className="text-[9px] font-black text-amber-600 uppercase tracking-widest leading-none mb-1">Practice Runs</p>
+                             <p className="text-xl font-black text-slate-900 leading-none">{pStats.count}</p>
+                          </div>
+                          <div className="text-right">
+                             <p className="text-[9px] font-black text-emerald-600 uppercase tracking-widest leading-none mb-1">Avg Attempted</p>
+                             <p className="text-xl font-black text-slate-900 leading-none">{pStats.avgAttempted}</p>
+                          </div>
+                        </div>
+                      );
+                    })()}
                     <div className="text-right">
                        <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest leading-none">Status</p>
                        <p className="text-xl font-black text-slate-900 uppercase">Candidate #{(studentSearch || '8').slice(-2)}</p>
@@ -334,8 +386,8 @@ export default function TeacherReports() {
                           {sub.studentRollNo || '00'}
                         </div>
                         <div>
-                          <p className="font-black text-slate-800 uppercase text-sm tracking-tight">{sub.studentName || 'Unvetted Name'}</p>
-                          <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">{sub.studentRollNo || 'External/Anon'}</p>
+                          <p className="font-black text-slate-800 uppercase text-base tracking-tight">{sub.studentName || 'Unvetted Name'}</p>
+                          <p className="text-[11px] text-slate-400 font-bold uppercase tracking-widest">{sub.studentRollNo || 'External/Anon'}</p>
                         </div>
                       </div>
                     </td>
@@ -367,10 +419,11 @@ export default function TeacherReports() {
                     </td>
                     <td className="py-8 text-right">
                        <button 
-                         onClick={() => setViewingSubmission(sub)}
-                         className="p-4 bg-slate-900 text-white rounded-[1.5rem] hover:bg-indigo-600 transition-all shadow-xl shadow-slate-200 active:scale-95"
+                         disabled={loadingSheet}
+                         onClick={() => handleViewSubmission(sub)}
+                         className="p-4 bg-slate-900 text-white rounded-[1.5rem] hover:bg-indigo-600 transition-all shadow-xl shadow-slate-200 active:scale-95 disabled:opacity-50"
                        >
-                         <Eye size={18} />
+                         {loadingSheet ? <Loader2 className="animate-spin" size={18} /> : <Eye size={18} />}
                        </button>
                     </td>
                   </motion.tr>
@@ -406,13 +459,26 @@ export default function TeacherReports() {
               className="bg-white w-full max-w-2xl h-full relative z-10 shadow-2xl flex flex-col overflow-hidden"
             >
               <div className="bg-slate-900 p-12 text-white relative">
-                 <button onClick={() => setViewingSubmission(null)} className="absolute top-8 right-8 text-white/40 hover:text-white transition-colors">
-                    <X size={32} />
-                 </button>
-                 <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">Student Identity Verified</p>
-                 <h2 className="text-4xl font-black uppercase tracking-tight italic mb-6">
-                   {viewingSubmission.studentName}
-                 </h2>
+                 <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">Student Identity Verified</p>
+                      <h2 className="text-4xl font-black uppercase tracking-tight italic mb-6">
+                        {viewingSubmission.studentName}
+                      </h2>
+                    </div>
+                    <div className="flex gap-4">
+                      <button 
+                        onClick={() => window.print()}
+                        className="p-4 bg-emerald-600 text-white rounded-[1.5rem] hover:bg-emerald-700 transition-all shadow-xl shadow-emerald-100 flex items-center gap-2"
+                      >
+                         <Printer size={18} />
+                         <span className="text-[10px] font-black uppercase">Print Response Sheet</span>
+                      </button>
+                      <button onClick={() => setViewingSubmission(null)} className="p-4 bg-white/10 text-white/40 hover:text-white rounded-2xl transition-colors">
+                        <X size={24} />
+                      </button>
+                    </div>
+                 </div>
                  <div className="flex gap-4">
                     <div className="px-4 py-2 bg-white/10 rounded-xl text-[10px] font-black uppercase">Roll: {viewingSubmission.studentRollNo}</div>
                     <div className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase", viewingSubmission.status === 'PASS' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400')}>
@@ -443,17 +509,19 @@ export default function TeacherReports() {
                     return (
                       <div key={qId} className="group p-6 bg-slate-50 rounded-3xl border border-transparent hover:border-slate-200 transition-all">
                         <div className="flex justify-between items-start gap-4 mb-4">
-                          <p className="font-bold text-slate-800 leading-tight flex-1">{qData?.text || 'Deleted Question Data'}</p>
+                          <MathRenderer content={qData?.text || 'Deleted Question Data'} className="font-black text-slate-900 leading-tight flex-1 text-lg" />
                           {isCorrect ? <CheckCircle2 className="text-emerald-500 flex-shrink-0" /> : <XCircle className="text-rose-500 flex-shrink-0" />}
                         </div>
                         <div className="grid grid-cols-2 gap-2">
                            <div className="text-[10px] uppercase tracking-widest">
                               <span className="text-slate-400 font-bold">Student Res:</span> 
                               <span className={cn("ml-2 font-black", isCorrect ? 'text-emerald-600' : 'text-rose-600')}>{answer}</span>
+                              {qData?.options?.[answer] && <MathRenderer content={qData.options[answer]} className="mt-1 text-[9px] lowercase opacity-60" />}
                            </div>
                            <div className="text-[10px] uppercase tracking-widest">
                               <span className="text-slate-400 font-bold">Key Matrix:</span> 
                               <span className="ml-2 font-black text-indigo-600">{qData?.answer}</span>
+                              {qData?.options?.[qData.answer] && <MathRenderer content={qData.options[qData.answer]} className="mt-1 text-[9px] lowercase opacity-60" />}
                            </div>
                         </div>
                       </div>

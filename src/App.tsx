@@ -6,8 +6,8 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
-import { auth, db, testConnection } from './lib/firebase';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { auth, db } from './lib/firebase';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, LogOut, LayoutDashboard, FileText, UserCircle, Settings, Shield } from 'lucide-react';
 
@@ -29,30 +29,48 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    testConnection();
+    let detachSnapshot: (() => void) | null = null;
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        // Fetch user role
-        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-        if (userDoc.exists()) {
-          const userData = userDoc.data();
-          setRole(userData.role);
-          
-          // Special SuperAdmin check for thenajmulhuda@gmail.com
-          if (currentUser.email === 'thenajmulhuda@gmail.com') {
-            setRole('superadmin');
+        // Clear previous listener if it exists
+        if (detachSnapshot) detachSnapshot();
+
+        // Listen to user document in real-time
+        // This is crucial for detecting when a stub document is migrated to a UID document during first login
+        detachSnapshot = onSnapshot(doc(db, 'users', currentUser.uid), (snapshot) => {
+          if (snapshot.exists()) {
+            const userData = snapshot.data();
+            setRole(userData.role || 'student');
+            
+            // Special SuperAdmin check for thenajmulhuda@gmail.com
+            if (currentUser.email === 'thenajmulhuda@gmail.com') {
+              setRole('superadmin');
+            }
+          } else {
+            // Document doesn't exist at UID yet (might be awaiting migration)
+            // We set role to null to indicate it's still being fetched/migrated
+            setRole(null);
           }
-        } else {
-          setRole('student'); // Default role
-        }
-        setUser(currentUser);
+          setUser(currentUser);
+          setLoading(false);
+        }, (error) => {
+          console.error("User doc listener error:", error);
+          setLoading(false);
+        });
+
       } else {
+        if (detachSnapshot) detachSnapshot();
         setUser(null);
         setRole(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
-    return () => unsubscribe();
+
+    return () => {
+      unsubscribe();
+      if (detachSnapshot) detachSnapshot();
+    };
   }, []);
 
   if (loading) {
@@ -78,28 +96,35 @@ export default function App() {
           
           <Route path="/" element={
             user ? (
-              role === 'superadmin' ? <Navigate to="/superadmin" /> :
-              role === 'principal' ? <Navigate to="/principal" /> :
-              role === 'teacher' ? <Navigate to="/teacher" /> :
-              role === 'admin' ? <Navigate to="/admin" /> :
-              <Navigate to="/student" />
+              role ? (
+                role === 'superadmin' ? <Navigate to="/superadmin" /> :
+                role === 'principal' ? <Navigate to="/principal" /> :
+                role === 'teacher' ? <Navigate to="/teacher" /> :
+                role === 'admin' ? <Navigate to="/admin" /> :
+                <Navigate to="/student" />
+              ) : (
+                <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 gap-4">
+                  <Loader2 className="w-10 h-10 animate-spin text-blue-600" />
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest animate-pulse">Initializing Identity Profile...</p>
+                </div>
+              )
             ) : <LoginPage />
           } />
 
           <Route path="/superadmin/*" element={
-            user && role === 'superadmin' ? <SuperAdminDashboard /> : <Navigate to="/login" />
+            user && role === 'superadmin' ? <SuperAdminDashboard /> : (user && !role ? <Navigate to="/" /> : <Navigate to="/login" />)
           } />
 
           <Route path="/principal/*" element={
-            user && role === 'principal' ? <PrincipalDashboard /> : <Navigate to="/login" />
+            user && role === 'principal' ? <PrincipalDashboard /> : (user && !role ? <Navigate to="/" /> : <Navigate to="/login" />)
           } />
 
           <Route path="/teacher/*" element={
-            user && role === 'teacher' ? <TeacherDashboard /> : <Navigate to="/login" />
+            user && role === 'teacher' ? <TeacherDashboard /> : (user && !role ? <Navigate to="/" /> : <Navigate to="/login" />)
           } />
 
           <Route path="/student/*" element={
-            user && role === 'student' ? <StudentDashboard /> : <Navigate to="/login" />
+            user && role === 'student' ? <StudentDashboard /> : (user && !role ? <Navigate to="/" /> : <Navigate to="/login" />)
           } />
 
           <Route path="/quiz/:testId" element={
