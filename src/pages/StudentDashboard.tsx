@@ -1,113 +1,47 @@
-import { useState, useEffect } from 'react';
-import { db, auth } from '../lib/firebase';
-import { collection, query, where, getDocs, orderBy, doc, getDoc } from 'firebase/firestore';
+import { useState, useMemo } from 'react';
+import { db } from '../lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  GraduationCap, 
-  Clock, 
-  ShieldCheck, 
-  ArrowRight, 
-  LogOut,
-  History,
-  LayoutDashboard,
-  Loader2,
-  BrainCircuit,
-  Target,
-  CheckCircle2,
-  XCircle,
-  Eye,
-  FileText,
-  X,
-  TrendingUp,
-  Award
+  GraduationCap, Clock, ShieldCheck, ArrowRight, LogOut, History,
+  LayoutDashboard, Loader2, BrainCircuit, Target, CheckCircle2,
+  XCircle, Eye, FileText, X, TrendingUp, Award
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { cn } from '../lib/utils';
 import MathRenderer from '../components/MathRenderer';
+import { useAuth } from '../context/AuthContext';
+import { auth } from '../lib/firebase';
+import { useStudentTests, useStudentSubmissions, usePracticeProgress } from '../hooks/useQueries';
 
 import { 
-  LineChart, 
-  Line, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
-  ResponsiveContainer,
-  AreaChart,
-  Area
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area
 } from 'recharts';
 
 export default function StudentDashboard() {
-  const [tests, setTests] = useState<any[]>([]);
-  const [submissions, setSubmissions] = useState<any[]>([]);
+  const { user, profile } = useAuth();
+  const collegeId = profile?.collegeId;
+  
+  const { data: tests = [], isLoading: loadingTests } = useStudentTests(collegeId);
+  const { data: submissions = [], isLoading: loadingSubs } = useStudentSubmissions(user?.uid);
+  const { data: progress = {}, isLoading: loadingProg } = usePracticeProgress(user?.uid);
+  
   const [questions, setQuestions] = useState<Record<string, any>>({});
-  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'live' | 'history'>('live');
   const [viewingResult, setViewingResult] = useState<any>(null);
-  const [progress, setProgress] = useState<Record<string, any>>({});
-  const [growthData, setGrowthData] = useState<any[]>([]);
-  const [officialName, setOfficialName] = useState("");
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
-    try {
-      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
-      const userData = userDoc.data();
-      setOfficialName(userData?.officialName || userData?.displayName || auth.currentUser?.displayName || "");
-      const collegeId = userData?.collegeId;
-
-      if (!collegeId) return;
-
-      // 1 & 2 Parallelized for speed
-      const [testSnap, subSnap] = await Promise.all([
-        getDocs(query(
-          collection(db, 'tests'), 
-          where('status', '==', 'active'),
-          where('collegeId', '==', collegeId),
-          orderBy('createdAt', 'desc')
-        )),
-        getDocs(query(
-          collection(db, 'submissions'),
-          where('studentId', '==', auth.currentUser?.uid),
-          orderBy('submittedAt', 'desc')
-        ))
-      ]);
-
-      const testList = testSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
-      setTests(testList);
-
-      const subList = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
-      setSubmissions(subList);
-
-      // 4. Fetch Progress for Practice Tests
-      if (auth.currentUser) {
-        const progSnap = await getDocs(query(collection(db, 'practice_progress'), where('studentId', '==', auth.currentUser.uid)));
-        const progMap: Record<string, any> = {};
-        progSnap.docs.forEach(d => { progMap[d.data().testId] = d.data(); });
-        setProgress(progMap);
-      }
-
-      // 3. Performance Trend
-      const trend = [...subList].reverse().map((s, i) => ({
-        iteration: i + 1,
-        score: Math.round(s.percentage || (s.score/s.total*100)),
-        title: testList.find(t => t.id === (s as any).testId)?.title || 'Test'
-      }));
-      setGrowthData(trend);
-
-      // 4. Questions are now fetched on-demand in handleFullSheet to avoid bulk download
-
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const [loadingSheet, setLoadingSheet] = useState(false);
+
+  const loading = loadingTests || loadingSubs || loadingProg;
+
+  const growthData = useMemo(() => {
+    return [...submissions].reverse().map((s, i) => ({
+      iteration: i + 1,
+      score: Math.round(s.percentage || (s.score/s.total*100)),
+      title: tests.find(t => t.id === s.testId)?.title || 'Test'
+    }));
+  }, [submissions, tests]);
+
+  const officialName = profile?.displayName || user?.displayName || "";
 
   const handleFullSheet = async (sub: any) => {
     setLoadingSheet(true);
