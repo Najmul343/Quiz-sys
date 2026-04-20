@@ -5,9 +5,11 @@ import { motion } from 'framer-motion';
 import { BookOpen, FileText, Users, TrendingUp, AlertCircle, BrainCircuit, ArrowRight, ShieldCheck, Target } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
 
 export default function TeacherOverview() {
   const navigate = useNavigate();
+  const { profile } = useAuth();
   const [stats, setStats] = useState({
     totalQuestions: 0,
     activeTests: 0,
@@ -19,14 +21,14 @@ export default function TeacherOverview() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchStats();
-  }, []);
+    if (profile?.collegeId) {
+      fetchStats(profile.collegeId);
+    }
+  }, [profile]);
 
-  const fetchStats = async () => {
+  const fetchStats = async (collegeIdArg?: string) => {
     try {
-      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
-      const userData = userDoc.data();
-      const collegeId = userData?.collegeId;
+      const collegeId = collegeIdArg || profile?.collegeId;
 
       if (!collegeId) return;
 

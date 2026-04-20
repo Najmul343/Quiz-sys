@@ -1,6 +1,7 @@
-export type UserRole = 'superadmin' | 'principal' | 'teacher' | 'student';
+export type UserRole = 'superadmin' | 'principal' | 'teacher' | 'student' | 'admin';
 
 export interface UserProfile {
+  id?: string;
   uid: string;
   email: string;
   displayName: string;
@@ -75,6 +76,7 @@ export interface Test {
   settings: TestSettings;
   teacherId: string;
   collegeId?: string;
+  visible?: boolean;
   status: 'active' | 'inactive' | 'draft';
   isPractice: boolean;
   createdAt: any;
@@ -84,10 +86,13 @@ export interface Submission {
   id: string;
   studentId: string;
   studentName: string; // Helpful for non-auth tests
+  studentRollNo?: string;
   testId: string;
   answers: Record<string, string>;
   score: number;
   total: number;
+  percentage?: number;
+  released?: boolean;
   status: 'PASS' | 'FAIL';
   violations: {
     fsExits: number;

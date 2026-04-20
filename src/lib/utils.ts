@@ -5,14 +5,26 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-// Convert native Google Drive viewer URLs into raw image render URLs
-export function getDriveImageUrl(url: string | undefined): string {
+export function getDirectImageUrl(url: string) {
   if (!url) return '';
-  if (url.includes('drive.google.com')) {
-    const match = url.match(/\/d\/(.*?)\//) || url.match(/id=(.*?)(&|$)/);
-    if (match && match[1]) {
-      return `https://drive.google.com/uc?export=view&id=${match[1]}`;
+  const trimmedUrl = url.trim();
+  if (!trimmedUrl) return '';
+
+  // Handle Google Drive
+  if (trimmedUrl.includes('drive.google.com')) {
+    const fileIdMatch = trimmedUrl.match(/\/d\/([^/]+)/) || trimmedUrl.match(/id=([^&]+)/);
+    if (fileIdMatch && fileIdMatch[1]) {
+      return `https://drive.google.com/uc?export=view&id=${fileIdMatch[1]}`;
     }
   }
-  return url;
+  return trimmedUrl;
+}
+
+export function isLikelyImageUrl(url: string) {
+  const normalized = (url || '').trim().toLowerCase();
+  return (
+    normalized.startsWith('data:image/') ||
+    normalized.includes('drive.google.com') ||
+    /\.(png|jpe?g|webp|gif|bmp|svg)(\?.*)?$/.test(normalized)
+  );
 }

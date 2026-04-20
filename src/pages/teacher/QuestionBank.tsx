@@ -21,7 +21,7 @@ import {
   AlertTriangle,
   Info
 } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { cn, getDirectImageUrl } from '../../lib/utils';
 import { generateQuestionsAI } from '../../services/geminiService';
 import * as pdfjs from 'pdfjs-dist';
 import mammoth from 'mammoth';
@@ -281,14 +281,19 @@ export default function QuestionBank() {
     setLoading(true);
     try {
       const qIds = filteredQuestions.map(q => q.id);
+      if (qIds.length === 0) {
+        alert("No questions found in this chapter.");
+        setLoading(false);
+        return;
+      }
       for (const id of qIds) {
         await deleteDoc(doc(db, 'questions', id));
       }
-      fetchQuestions();
-      alert(`Deleted ${qIds.length} questions.`);
-    } catch (e) {
+      await fetchQuestions();
+      alert(`Successfully deleted ${qIds.length} questions from "${activeChapter}".`);
+    } catch (e: any) {
       console.error(e);
-      alert("Failed to bulk delete.");
+      alert("Failed to bulk delete: " + (e.message || "Unknown error"));
     } finally {
       setLoading(false);
     }
@@ -373,9 +378,11 @@ export default function QuestionBank() {
     if (!confirm("Are you sure?")) return;
     try {
       await deleteDoc(doc(db, 'questions', id));
-      fetchQuestions();
-    } catch (e) {
+      await fetchQuestions();
+      alert("Question deleted successfully.");
+    } catch (e: any) {
       console.error(e);
+      alert("Deletion failed: " + (e.message || "Permission denied or network error"));
     }
   };
 
@@ -544,7 +551,7 @@ export default function QuestionBank() {
 
               {q.imageUrl && (
                 <div className="w-full h-32 bg-slate-50 rounded-2xl mb-4 overflow-hidden border border-slate-100">
-                   <img src={q.imageUrl} alt="Diagram" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                   <img src={getDirectImageUrl(q.imageUrl)} alt="Diagram" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
                 </div>
               )}
 
@@ -561,7 +568,7 @@ export default function QuestionBank() {
                   <MathRenderer content={q.explanation} />
                   {q.explanationImageUrl && (
                     <div className="mt-2 w-full h-24 bg-white rounded-lg border border-indigo-100 overflow-hidden">
-                       <img src={q.explanationImageUrl} alt="Explanation Link" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                       <img src={getDirectImageUrl(q.explanationImageUrl)} alt="Explanation Link" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
                     </div>
                   )}
                 </div>
@@ -582,9 +589,9 @@ export default function QuestionBank() {
                       {q.marathiOptions?.[key] && (
                         <p className="text-[9px] text-slate-400 mt-0.5 truncate">{q.marathiOptions[key]}</p>
                       )}
-                      {q.optionImages?.[key] && (
+                      {(q.optionImages as any)?.[key] && (
                         <div className="mt-1 w-full h-12 bg-white rounded-lg border border-slate-100 overflow-hidden">
-                           <img src={q.optionImages[key]} alt={`Opt ${key}`} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                           <img src={getDirectImageUrl((q.optionImages as any)[key])} alt={`Opt ${key}`} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
                         </div>
                       )}
                     </div>

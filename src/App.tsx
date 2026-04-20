@@ -3,13 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { useAuth } from './context/AuthContext';
-import ProtectedRoute from './components/ProtectedRoute';
-import { Loader2 } from 'lucide-react';
-import { cn } from './lib/utils';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { auth, db } from './lib/firebase';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Loader2, LogOut, LayoutDashboard, FileText, UserCircle, Settings, Shield } from 'lucide-react';
 
-// Modules
+// Modules (To be created)
+import Home from './pages/Home';
 import LoginPage from './pages/Login';
 import TeacherDashboard from './pages/TeacherDashboard';
 import StudentDashboard from './pages/StudentDashboard';
@@ -18,31 +21,57 @@ import AdminDashboard from './pages/AdminDashboard';
 import PrincipalDashboard from './pages/PrincipalDashboard';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 
-function RootRedirect() {
-  const { user, role, loading } = useAuth();
-  
-  if (loading || (user && !role)) {
-    return (
-      <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 gap-4">
-        <Loader2 className="w-10 h-10 animate-spin text-blue-600" />
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest animate-pulse">Initializing Identity Profile...</p>
-      </div>
-    );
-  }
-
-  if (!user) return <Navigate to="/login" replace />;
-
-  switch (role) {
-    case 'superadmin': return <Navigate to="/superadmin" replace />;
-    case 'principal': return <Navigate to="/principal" replace />;
-    case 'teacher': return <Navigate to="/teacher" replace />;
-    case 'admin' as any: return <Navigate to="/admin" replace />;
-    default: return <Navigate to="/student" replace />;
-  }
-}
+import { cn } from './lib/utils';
 
 export default function App() {
-  const { role, user, loading } = useAuth();
+  const [user, setUser] = useState<User | null>(null);
+  const [role, setRole] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let detachSnapshot: (() => void) | null = null;
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (currentUser) {
+        // Clear previous listener if it exists
+        if (detachSnapshot) detachSnapshot();
+
+        // Listen to user document in real-time
+        // This is crucial for detecting when a stub document is migrated to a UID document during first login
+        detachSnapshot = onSnapshot(doc(db, 'users', currentUser.uid), (snapshot) => {
+          if (snapshot.exists()) {
+            const userData = snapshot.data();
+            setRole(userData.role || 'student');
+            
+            // Special SuperAdmin check for thenajmulhuda@gmail.com
+            if (currentUser.email === 'thenajmulhuda@gmail.com') {
+              setRole('superadmin');
+            }
+          } else {
+            // Document doesn't exist at UID yet (might be awaiting migration)
+            // We set role to null to indicate it's still being fetched/migrated
+            setRole(null);
+          }
+          setUser(currentUser);
+          setLoading(false);
+        }, (error) => {
+          console.error("User doc listener error:", error);
+          setLoading(false);
+        });
+
+      } else {
+        if (detachSnapshot) detachSnapshot();
+        setUser(null);
+        setRole(null);
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      if (detachSnapshot) detachSnapshot();
+    };
+  }, []);
 
   if (loading) {
     return (
@@ -63,47 +92,51 @@ export default function App() {
         !role && "bg-slate-50"
       )}>
         <Routes>
-          <Route path="/" element={<RootRedirect />} />
+          <Route path="/login" element={!user ? <LoginPage /> : <Navigate to="/" />} />
           
-          <Route path="/login" element={!user ? <LoginPage /> : <Navigate to="/" replace />} />
+          <Route path="/" element={
+            user ? (
+              role ? (
+                role === 'superadmin' ? <Navigate to="/superadmin" /> :
+                role === 'principal' ? <Navigate to="/principal" /> :
+                role === 'teacher' ? <Navigate to="/teacher" /> :
+                role === 'admin' ? <Navigate to="/admin" /> :
+                <Navigate to="/student" />
+              ) : (
+                <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 gap-4">
+                  <Loader2 className="w-10 h-10 animate-spin text-blue-600" />
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest animate-pulse">Initializing Identity Profile...</p>
+                </div>
+              )
+            ) : <LoginPage />
+          } />
 
           <Route path="/superadmin/*" element={
-            <ProtectedRoute allowedRoles={['superadmin']}>
-              <SuperAdminDashboard />
-            </ProtectedRoute>
+            user && role === 'superadmin' ? <SuperAdminDashboard /> : (user && !role ? <Navigate to="/" /> : <Navigate to="/login" />)
           } />
 
           <Route path="/principal/*" element={
-            <ProtectedRoute allowedRoles={['principal']}>
-              <PrincipalDashboard />
-            </ProtectedRoute>
+            user && role === 'principal' ? <PrincipalDashboard /> : (user && !role ? <Navigate to="/" /> : <Navigate to="/login" />)
           } />
 
           <Route path="/teacher/*" element={
-            <ProtectedRoute allowedRoles={['teacher']}>
-              <TeacherDashboard />
-            </ProtectedRoute>
+            user && role === 'teacher' ? <TeacherDashboard /> : (user && !role ? <Navigate to="/" /> : <Navigate to="/login" />)
           } />
 
           <Route path="/student/*" element={
-            <ProtectedRoute allowedRoles={['student']}>
-              <StudentDashboard />
-            </ProtectedRoute>
-          } />
-
-          <Route path="/admin/*" element={
-            <ProtectedRoute allowedRoles={['admin' as any]}>
-              <AdminDashboard />
-            </ProtectedRoute>
+            user && role === 'student' ? <StudentDashboard /> : (user && !role ? <Navigate to="/" /> : <Navigate to="/login" />)
           } />
 
           <Route path="/quiz/:testId" element={
-            <ProtectedRoute>
-              <QuizSession />
-            </ProtectedRoute>
+            user ? <QuizSession /> : <Navigate to="/login" />
+          } />
+
+          <Route path="/admin/*" element={
+            user && role === 'admin' ? <AdminDashboard /> : <Navigate to="/login" />
           } />
         </Routes>
       </div>
     </Router>
   );
 }
+

@@ -17,14 +17,22 @@ export async function generateQuestionsAI(subject: string, topic: string, diffic
 
     MATHEMATICAL CONTENT: For any mathematical expressions, equations, or scientific notation (integration, differentiation, complex physics formulas, etc.), you MUST use LaTeX formatting wrapped in dollar signs ($...$ for inline, $$...$$ for block).
 
+    FORMATTING RULES:
+    - Write the question text and explanation in clean markdown.
+    - Preserve readable line breaks for match-the-following, assertions/reasons, tables, paragraph cases, and step-based explanations.
+    - Use short bullet lists in explanations when it improves clarity.
+    - Use **bold** only for key labels or headings when useful.
+    - Do not return HTML.
+    - If the question contains List-I / List-II or columns to match, place each item on its own line.
+
     Return ONLY a JSON array in this format:
     [
       {
-        "text": "Question text here (with LaTeX if needed)?",
+        "text": "Question text here with readable markdown formatting and preserved line breaks (with LaTeX if needed)?",
         "options": { "A": "Opt 1", "B": "Opt 2", "C": "Opt 3", "D": "Opt 4" },
         "answer": "A",
         "difficulty": "${difficulty}",
-        "explanation": "Why A is correct (with LaTeX if needed)",
+        "explanation": "Why A is correct with readable markdown formatting (with LaTeX if needed)",
         "subject": "${subject}",
         "needsImage": true/false,
         "imageDescription": "Description of the required diagram if needsImage is true"

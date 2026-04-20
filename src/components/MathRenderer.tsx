@@ -9,9 +9,20 @@ interface MathRendererProps {
 
 export default function MathRenderer({ content, className = '' }: MathRendererProps) {
   // Automatically convert standalone image URLs to markdown images
+  // Improved regex to catch more Google Drive formats and standard images
   const processedContent = content.replace(
-    /(^|\s)(https?:\/\/[^\s]+\.(?:jpeg|jpg|gif|png|webp|svg)(?:\?[^\s]*)?|https?:\/\/drive\.google\.com\/uc[^\s]+)/gi,
-    (match, p1, p2) => `${p1}![Asset](${p2})`
+    /(^|\s)(https?:\/\/[^\s]+\.(?:jpeg|jpg|gif|png|webp|svg)(?:\?[^\s]*)?|https?:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)[^\s]+)/gi,
+    (match, p1, p2) => {
+      let finalUrl = p2;
+      // Transform Drive link to direct link for rendering if needed
+      if (p2.includes('drive.google.com')) {
+        const fileIdMatch = p2.match(/\/d\/([^/]+)/) || p2.match(/id=([^&]+)/);
+        if (fileIdMatch && fileIdMatch[1]) {
+          finalUrl = `https://drive.google.com/uc?id=${fileIdMatch[1]}&export=download`;
+        }
+      }
+      return `${p1}![Asset](${finalUrl})`;
+    }
   );
 
   return (

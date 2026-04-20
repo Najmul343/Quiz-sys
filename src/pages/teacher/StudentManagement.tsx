@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../../lib/firebase';
-import { collection, query, where, getDocs, addDoc, serverTimestamp, setDoc, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, serverTimestamp, setDoc, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   UserPlus, 
@@ -18,11 +18,16 @@ import {
   CheckCircle2,
   X,
   AlertTriangle,
-  UserCheck
+  UserCheck,
+  CalendarDays,
+  Clock3
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { useAuth } from '../../context/AuthContext';
 
 export default function StudentManagement() {
+  const { profile } = useAuth();
+  const todayLocal = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   const [students, setStudents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -32,6 +37,21 @@ export default function StudentManagement() {
   const [searchTerm, setSearchTerm] = useState('');
   const [status, setStatus] = useState<{type: 'success' | 'error', message: string} | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [currentCollegeId, setCurrentCollegeId] = useState('');
+  const [attendanceDate, setAttendanceDate] = useState(todayLocal);
+  const [attendanceRecords, setAttendanceRecords] = useState<Record<string, 'present' | 'absent' | 'late'>>({});
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceSavingStudentId, setAttendanceSavingStudentId] = useState<string | null>(null);
+
+  const getAttendanceDocId = (collegeId: string, date: string, studentId: string) => `${collegeId}_${date}_${studentId}`;
+
+  const getAttendanceErrorMessage = (error: unknown, fallback: string) => {
+    const message = error instanceof Error ? error.message.toLowerCase() : '';
+    if (message.includes('missing or insufficient permissions')) {
+      return "Attendance permissions are blocked in Firestore for this account.";
+    }
+    return fallback;
+  };
 
   useEffect(() => {
     if (status) {
@@ -41,16 +61,55 @@ export default function StudentManagement() {
   }, [status]);
 
   useEffect(() => {
-    fetchStudents();
-  }, []);
+    if (profile?.collegeId) {
+      setCurrentCollegeId(profile.collegeId);
+      fetchStudents(profile.collegeId);
+    }
+  }, [profile]);
 
-  const fetchStudents = async () => {
+  useEffect(() => {
+    if (currentCollegeId && students.length) {
+      fetchAttendanceForDate(currentCollegeId, attendanceDate, students);
+    } else {
+      setAttendanceRecords({});
+    }
+  }, [currentCollegeId, attendanceDate, students]);
+
+  const fetchAttendanceForDate = async (collegeId: string, targetDate: string, studentList: any[]) => {
+    setAttendanceLoading(true);
     try {
-      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
-      const userData = userDoc.data();
-      const collegeId = userData?.collegeId;
+      const records: Record<string, 'present' | 'absent' | 'late'> = {};
+
+      const attendanceDocs = await Promise.all(
+        studentList.map((student) =>
+          getDoc(doc(db, 'attendance', getAttendanceDocId(collegeId, targetDate, student.id)))
+        )
+      );
+
+      attendanceDocs.forEach((attendanceDoc) => {
+        if (attendanceDoc.exists()) {
+          const data = attendanceDoc.data() as any;
+          if (data.studentId && data.status) {
+            records[data.studentId] = data.status;
+          }
+        }
+      });
+
+      setAttendanceRecords(records);
+    } catch (error) {
+      console.error(error);
+      setStatus({ type: 'error', message: getAttendanceErrorMessage(error, "Attendance register could not be synchronized.") });
+    } finally {
+      setAttendanceLoading(false);
+    }
+  };
+
+  const fetchStudents = async (collegeIdArg?: string) => {
+    try {
+      const collegeId = collegeIdArg || profile?.collegeId;
 
       if (!collegeId) return;
+      setCurrentCollegeId(collegeId);
 
       const q = query(
         collection(db, 'users'), 
@@ -76,6 +135,30 @@ export default function StudentManagement() {
     }
   };
 
+  const markAttendance = async (student: any, statusValue: 'present' | 'absent' | 'late') => {
+    if (!currentCollegeId) return;
+    try {
+      setAttendanceSavingStudentId(student.id);
+      await setDoc(doc(db, 'attendance', getAttendanceDocId(currentCollegeId, attendanceDate, student.id)), {
+        collegeId: currentCollegeId,
+        date: attendanceDate,
+        studentId: student.id,
+        studentName: student.officialName || student.displayName,
+        studentRollNo: student.rollNo || '',
+        status: statusValue,
+        teacherId: auth.currentUser?.uid,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+
+      setAttendanceRecords(prev => ({ ...prev, [student.id]: statusValue }));
+    } catch (error) {
+      console.error(error);
+      setStatus({ type: 'error', message: getAttendanceErrorMessage(error, "Attendance update failed.") });
+    } finally {
+      setAttendanceSavingStudentId(null);
+    }
+  };
+
   const handleAddStudent = async () => {
     if (!newStudent.name || !newStudent.email) {
       setStatus({ type: 'error', message: "Identity credentials incomplete." });
@@ -84,9 +167,8 @@ export default function StudentManagement() {
     setSaving(true);
     setStatus(null);
     try {
-      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
-      const userData = userDoc.data();
-      const collegeId = userData?.collegeId;
+      const collegeId = currentCollegeId || profile?.collegeId;
+      if (!collegeId) throw new Error("College context missing. Please reload the session.");
 
       const cleanEmail = newStudent.email.toLowerCase().trim();
 
@@ -131,6 +213,8 @@ export default function StudentManagement() {
     setSaving(true);
     setStatus(null);
     try {
+      const collegeId = currentCollegeId || profile?.collegeId;
+      if (!collegeId) throw new Error("College context missing. Please reload the session.");
       const cleanEmail = editingStudent.email.toLowerCase().trim();
       const newId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '_');
       const isMigrated = !!editingStudent.uid;
@@ -163,7 +247,7 @@ export default function StudentManagement() {
           rollNo: editingStudent.rollNo,
           trade: editingStudent.trade,
           role: 'student',
-          collegeId: editingStudent.collegeId,
+          collegeId,
           addedBy: editingStudent.addedBy || auth.currentUser?.uid,
           createdAt: editingStudent.createdAt || serverTimestamp(),
           updatedAt: serverTimestamp()
@@ -205,6 +289,13 @@ export default function StudentManagement() {
     (s.rollNo || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const attendanceStats = {
+    present: filteredStudents.filter(student => attendanceRecords[student.id] === 'present').length,
+    absent: filteredStudents.filter(student => attendanceRecords[student.id] === 'absent').length,
+    late: filteredStudents.filter(student => attendanceRecords[student.id] === 'late').length,
+    pending: filteredStudents.filter(student => !attendanceRecords[student.id]).length,
+  };
+
   if (loading) return <div className="h-64 flex items-center justify-center"><Loader2 className="animate-spin text-blue-600" /></div>;
 
   return (
@@ -234,6 +325,41 @@ export default function StudentManagement() {
           placeholder="Lookup by roll no, name, or email..."
           className="w-full pl-16 pr-8 py-6 bg-white border border-slate-100 rounded-[2rem] shadow-xl shadow-slate-200/40 focus:border-blue-600 outline-none transition-all font-bold text-slate-700"
         />
+      </div>
+
+      <div className="bg-white p-8 rounded-[3rem] border border-slate-100 shadow-xl shadow-slate-200/30 space-y-6">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div>
+            <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight italic">Attendance Register</h3>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Mark present, absent, or late for each student and surface it in principal analytics</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 px-4 py-3 bg-slate-50 rounded-2xl border border-slate-100">
+              <CalendarDays size={16} className="text-indigo-600" />
+              <input
+                type="date"
+                value={attendanceDate}
+                onChange={e => setAttendanceDate(e.target.value)}
+                className="bg-transparent text-[11px] font-black uppercase tracking-widest text-slate-600 outline-none"
+              />
+            </div>
+            {attendanceLoading && <Loader2 className="animate-spin text-indigo-600" size={18} />}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {[
+            { label: 'Present', value: attendanceStats.present, tone: 'emerald' },
+            { label: 'Late', value: attendanceStats.late, tone: 'amber' },
+            { label: 'Absent', value: attendanceStats.absent, tone: 'rose' },
+            { label: 'Pending', value: attendanceStats.pending, tone: 'slate' },
+          ].map(item => (
+            <div key={item.label} className="p-4 rounded-2xl border border-slate-100 bg-slate-50/70">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{item.label}</p>
+              <p className="text-2xl font-black text-slate-900 mt-1">{item.value}</p>
+            </div>
+          ))}
+        </div>
       </div>
 
       <AnimatePresence>
@@ -316,6 +442,50 @@ export default function StudentManagement() {
                         <Mail size={16} className="text-slate-400" />
                         <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest truncate">{student.email}</span>
                      </div>
+                  </div>
+
+                  <div className="mt-5 pt-5 border-t border-slate-100">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Attendance for {attendanceDate}</p>
+                      <span className={cn(
+                        "px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border",
+                        attendanceRecords[student.id] === 'present' && "bg-emerald-50 text-emerald-600 border-emerald-100",
+                        attendanceRecords[student.id] === 'late' && "bg-amber-50 text-amber-600 border-amber-100",
+                        attendanceRecords[student.id] === 'absent' && "bg-rose-50 text-rose-600 border-rose-100",
+                        !attendanceRecords[student.id] && "bg-slate-50 text-slate-500 border-slate-100"
+                      )}>
+                        {attendanceRecords[student.id] || 'pending'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { key: 'present' as const, label: 'Present', icon: UserCheck, tone: 'emerald' },
+                        { key: 'late' as const, label: 'Late', icon: Clock3, tone: 'amber' },
+                        { key: 'absent' as const, label: 'Absent', icon: AlertTriangle, tone: 'rose' },
+                      ].map(option => (
+                        <button
+                          key={`${student.id}-${option.key}`}
+                          type="button"
+                          onClick={() => markAttendance(student, option.key)}
+                          disabled={attendanceSavingStudentId === student.id}
+                          className={cn(
+                            "py-3 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2",
+                            attendanceRecords[student.id] === option.key
+                              ? option.key === 'present'
+                                ? "bg-emerald-600 text-white border-emerald-600"
+                                : option.key === 'late'
+                                  ? "bg-amber-500 text-white border-amber-500"
+                                  : "bg-rose-600 text-white border-rose-600"
+                              : "bg-white text-slate-500 border-slate-200 hover:border-slate-300",
+                            attendanceSavingStudentId === student.id && "opacity-60 cursor-wait"
+                          )}
+                        >
+                          {attendanceSavingStudentId === student.id ? <Loader2 size={12} className="animate-spin" /> : <option.icon size={12} />}
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                </div>
             </div>

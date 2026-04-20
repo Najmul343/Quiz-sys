@@ -16,7 +16,7 @@ import {
   RotateCcw,
   Info
 } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { cn, getDirectImageUrl } from '../lib/utils';
 import MathRenderer from '../components/MathRenderer';
 
 export default function QuizSession() {
@@ -425,7 +425,7 @@ export default function QuizSession() {
               {currentQ.imageUrl && (
                 <div className="max-w-2xl mx-auto bg-slate-50 p-2 sm:p-4 rounded-2xl border border-slate-100 shadow-sm">
                    <img 
-                     src={currentQ.imageUrl} 
+                     src={getDirectImageUrl(currentQ.imageUrl)} 
                      alt="Question Content" 
                      className="w-full max-h-48 sm:max-h-80 object-contain rounded-xl"
                      referrerPolicy="no-referrer"
@@ -472,7 +472,7 @@ export default function QuizSession() {
                     {optImage && (
                       <div className="mt-3 w-full bg-white p-2 rounded-lg border border-slate-100">
                         <img 
-                          src={optImage} 
+                          src={getDirectImageUrl(optImage)} 
                           alt={`Option ${key}`} 
                           className="w-full max-h-24 sm:max-h-32 object-contain rounded"
                           referrerPolicy="no-referrer"
@@ -504,7 +504,7 @@ export default function QuizSession() {
                 {currentQ.explanationImageUrl && (
                   <div className="mt-6 bg-white p-4 rounded-2xl border border-slate-100 shadow-sm max-w-xl mx-auto overflow-hidden">
                      <img 
-                       src={currentQ.explanationImageUrl} 
+                       src={getDirectImageUrl(currentQ.explanationImageUrl)} 
                        alt="Explanation Diagram" 
                        className="w-full max-h-64 object-contain rounded-xl"
                        referrerPolicy="no-referrer"
@@ -517,9 +517,16 @@ export default function QuizSession() {
         </div>
 
         {/* Right Side: Sidebar Palette (Desktop) */}
-        <aside className="hidden lg:flex w-80 bg-white border-l border-slate-200 flex-col shrink-0">
-          <div className="p-6 border-b border-slate-200 bg-slate-50/50">
-            <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest mb-4">Question Palette</h3>
+        <aside className="hidden lg:flex w-80 bg-white border-l border-slate-200 flex-col shrink-0 overflow-hidden h-full">
+          <div className="p-6 border-b border-slate-200 bg-slate-50/50 shrink-0">
+            <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest mb-2 font-mono">Exam Terminal</h3>
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Question Navigator</span>
+              <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded uppercase">{questions.length} Total</span>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
             <div className="grid grid-cols-5 gap-2">
               {questions.map((q, i) => {
                 const status = getStatus(i);
@@ -541,26 +548,26 @@ export default function QuizSession() {
                 );
               })}
             </div>
+
+            <div className="mt-8 space-y-4">
+              <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none border-b border-slate-100 pb-2">Status Legend</h3>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                 {[
+                   { label: 'Answered', count: Object.keys(answers).length, color: 'bg-emerald-500' },
+                   { label: 'Review', count: reviewIds.filter(id => !answers[id]).length, color: 'bg-amber-400 rounded-full' },
+                   { label: 'Ans & Review', count: reviewIds.filter(id => answers[id]).length, color: 'bg-amber-400 rounded-full after:content-["✓"] relative after:absolute after:bottom-0 after:right-0 after:w-2 after:h-2 after:bg-emerald-500 after:rounded-full' },
+                   { label: 'Not Visited', count: questions.length - Object.keys(answers).length - reviewIds.filter(id => !answers[id]).length, color: 'bg-white border-slate-200 border-2' },
+                 ].map(item => (
+                   <div key={item.label} className="flex items-center gap-2">
+                     <div className={cn("w-3 h-3 shrink-0 rounded", item.color)}></div>
+                     <span className="text-[9px] font-bold text-slate-500 truncate uppercase">{item.label}</span>
+                   </div>
+                 ))}
+              </div>
+            </div>
           </div>
 
-          <div className="p-6 space-y-3 overflow-y-auto custom-scrollbar flex-1">
-             <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest mb-3 leading-none">Legend</h3>
-             <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-                {[
-                  { label: 'Answered', count: Object.keys(answers).length, color: 'bg-emerald-500' },
-                  { label: 'Review', count: reviewIds.filter(id => !answers[id]).length, color: 'bg-amber-400 rounded-full' },
-                  { label: 'Ans & Review', count: reviewIds.filter(id => answers[id]).length, color: 'bg-amber-400 rounded-full after:content-["✓"] relative after:absolute after:bottom-0 after:right-0 after:w-2 after:h-2 after:bg-emerald-500 after:rounded-full' },
-                  { label: 'Not Visited', count: questions.length - 0 /* simplified */, color: 'bg-white border-slate-200 border-2' },
-                ].map(item => (
-                  <div key={item.label} className="flex items-center gap-2">
-                    <div className={cn("w-4 h-4 shrink-0 rounded", item.color)}></div>
-                    <span className="text-[10px] font-bold text-slate-600 truncate">{item.label}</span>
-                  </div>
-                ))}
-             </div>
-          </div>
-
-          <div className="p-6 border-t border-slate-200 mt-auto bg-slate-50/50">
+          <div className="p-6 border-t border-slate-200 bg-slate-50/50 shrink-0">
              <button 
                onClick={handleFinalSubmit}
                className="w-full py-4 bg-slate-900 hover:bg-emerald-600 text-white font-black rounded-xl transition-all shadow-xl shadow-slate-200 uppercase tracking-widest text-xs flex items-center justify-center gap-3"

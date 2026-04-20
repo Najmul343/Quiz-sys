@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../../lib/firebase';
-import { collection, query, getDocs, addDoc, serverTimestamp, doc, getDoc, setDoc, where } from 'firebase/firestore';
+import { collection, query, getDocs, addDoc, serverTimestamp, doc, getDoc, setDoc, where, updateDoc, orderBy } from 'firebase/firestore';
 import { motion } from 'framer-motion';
 import { 
   FilePlus, 
@@ -11,17 +11,34 @@ import {
   Plus, 
   ArrowRight,
   Loader2,
-  Settings2
+  Settings2,
+  Eye,
+  EyeOff,
+  Pencil
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
+import MathRenderer from '../../components/MathRenderer';
+import { useAuth } from '../../context/AuthContext';
 
-export default function TestCreator() {
+type TestCreatorProps = {
+  collegeIdOverride?: string;
+  viewerMode?: 'teacher' | 'college';
+  teacherIdsOverride?: string[];
+};
+
+export default function TestCreator({
+  collegeIdOverride,
+  viewerMode = 'teacher',
+  teacherIdsOverride,
+}: TestCreatorProps) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const editId = searchParams.get('id');
+  const { profile } = useAuth();
   
   const [questions, setQuestions] = useState<any[]>([]);
+  const [teacherTests, setTeacherTests] = useState<any[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -41,15 +58,18 @@ export default function TestCreator() {
   const [subjectFilter, setSubjectFilter] = useState("all");
   const [chapterFilter, setChapterFilter] = useState("all");
 
+  const sanitizeLegacyDocId = (value?: string | null) => (value || '').toLowerCase().trim().replace(/[^a-zA-Z0-9]/g, '_');
+  const dedupeById = <T extends { id: string }>(items: T[]) => Array.from(new Map(items.map((item) => [item.id, item])).values());
+
   useEffect(() => {
     const init = async () => {
-      await fetchQuestions();
+      await fetchQuestions(collegeIdOverride || profile?.collegeId);
       if (editId) {
         await loadExistingTest(editId);
       }
     };
     init();
-  }, [editId]);
+  }, [editId, profile, collegeIdOverride, viewerMode]);
 
   const loadExistingTest = async (id: string) => {
     try {
@@ -72,17 +92,53 @@ export default function TestCreator() {
     }
   };
 
-  const fetchQuestions = async () => {
+  const fetchQuestions = async (collegeIdArg?: string) => {
     try {
-      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
-      const userData = userDoc.data();
-      const collegeId = userData?.collegeId;
+      const collegeId = collegeIdArg || collegeIdOverride || profile?.collegeId;
 
       if (!collegeId) return;
 
       const q = query(collection(db, 'questions'), where('collegeId', '==', collegeId));
       const snap = await getDocs(q);
       setQuestions(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+      if (viewerMode === 'college') {
+        const fallbackTeacherIds = teacherIdsOverride?.length
+          ? teacherIdsOverride
+          : Array.from(
+              new Set(
+                [auth.currentUser?.uid, sanitizeLegacyDocId(auth.currentUser?.email)].filter(
+                  (value): value is string => !!value
+                )
+              )
+            );
+
+        const scopedQueries = [getDocs(query(collection(db, 'tests'), where('collegeId', '==', collegeId)))];
+        fallbackTeacherIds.forEach((teacherId) => {
+          scopedQueries.push(getDocs(query(collection(db, 'tests'), where('teacherId', '==', teacherId))));
+        });
+
+        const scopedResults = await Promise.allSettled(scopedQueries);
+        const tests = dedupeById(
+          scopedResults.flatMap((result) =>
+            result.status === 'fulfilled'
+              ? result.value.docs.map((testDoc) => ({ id: testDoc.id, ...testDoc.data() }))
+              : []
+          ) as any[]
+        ).filter((test: any) => test.collegeId === collegeId || !test.collegeId);
+
+        setTeacherTests([...tests].sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+        return;
+      }
+
+      const testsQuery = query(
+        collection(db, 'tests'),
+        where('collegeId', '==', collegeId),
+        where('teacherId', '==', auth.currentUser?.uid)
+      );
+      const testSnap = await getDocs(testsQuery);
+      const tests = testSnap.docs.map(testDoc => ({ id: testDoc.id, ...testDoc.data() }));
+      setTeacherTests([...tests].sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
     } catch (e) {
       console.error(e);
     } finally {
@@ -94,9 +150,8 @@ export default function TestCreator() {
     if (!title || selectedIds.length === 0) return;
     setSaving(true);
     try {
-      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
-      const userData = userDoc.data();
-      const collegeId = userData?.collegeId;
+      const collegeId = collegeIdOverride || profile?.collegeId;
+      if (!collegeId) throw new Error("College context missing.");
 
       const testData = {
         title,
@@ -123,7 +178,10 @@ export default function TestCreator() {
       } else {
         await addDoc(collection(db, 'tests'), { ...testData, createdAt: serverTimestamp() });
       }
-      navigate('/teacher');
+      await fetchQuestions(collegeId);
+      if (viewerMode === 'teacher') {
+        navigate('/teacher');
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -145,6 +203,19 @@ export default function TestCreator() {
   const deselectVisible = () => {
     const visibleIds = filteredQuestions.map(q => q.id);
     setSelectedIds(prev => prev.filter(id => !visibleIds.includes(id)));
+  };
+
+  const toggleTestVisibility = async (testId: string, currentVisibility: boolean | undefined) => {
+    try {
+      const nextVisibility = currentVisibility === false ? true : false;
+      await updateDoc(doc(db, 'tests', testId), {
+        visible: nextVisibility,
+        updatedAt: serverTimestamp(),
+      });
+      setTeacherTests(prev => prev.map(test => test.id === testId ? { ...test, visible: nextVisibility } : test));
+    } catch (error) {
+      console.error('Failed to toggle test visibility:', error);
+    }
   };
 
   const subjects = ['all', ...Array.from(new Set(questions.map(q => q.subject)))];
@@ -306,6 +377,86 @@ export default function TestCreator() {
           </div>
         </div>
 
+        <div className="bg-white p-8 rounded-[3rem] border border-slate-100 shadow-xl shadow-slate-200/30 space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight italic">Test Registry</h3>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">
+                {viewerMode === 'college'
+                  ? 'Principal or super admin can monitor and toggle any college test instantly'
+                  : 'Use the switch to show or hide any test from students instantly'}
+              </p>
+            </div>
+            <div className="px-4 py-2 bg-slate-50 rounded-2xl text-[10px] font-black uppercase tracking-widest text-slate-500 border border-slate-100">
+              {teacherTests.length} total tests
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {teacherTests.map((test) => (
+              <div key={test.id} className="p-5 rounded-[2rem] border border-slate-100 bg-slate-50/60 flex flex-col lg:flex-row lg:items-center gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                    <span className={cn(
+                      "px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border",
+                      test.visible === false ? "bg-rose-50 text-rose-600 border-rose-100" : "bg-emerald-50 text-emerald-600 border-emerald-100"
+                    )}>
+                      {test.visible === false ? 'Hidden' : 'Visible'}
+                    </span>
+                    <span className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border bg-indigo-50 text-indigo-600 border-indigo-100">
+                      {test.status}
+                    </span>
+                    {viewerMode === 'college' && test.teacherId && (
+                      <span className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border bg-slate-100 text-slate-500 border-slate-200">
+                        {test.teacherId}
+                      </span>
+                    )}
+                    {test.isPractice && (
+                      <span className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border bg-amber-50 text-amber-600 border-amber-100">
+                        Practice
+                      </span>
+                    )}
+                  </div>
+                  <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">{test.title}</h4>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                    {test.questionIds?.length || 0} questions • {test.duration} min • pass {test.passingMarks}%
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/teacher/create-test?id=${test.id}`)}
+                    className="px-4 py-3 bg-white border border-slate-200 rounded-2xl text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-indigo-600 hover:border-indigo-200 transition-all flex items-center gap-2"
+                  >
+                    <Pencil size={14} />
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleTestVisibility(test.id, test.visible)}
+                    className={cn(
+                      "px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 border",
+                      test.visible === false
+                        ? "bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-100"
+                        : "bg-slate-900 text-white border-slate-900 hover:bg-slate-800"
+                    )}
+                  >
+                    {test.visible === false ? <Eye size={14} /> : <EyeOff size={14} />}
+                    {test.visible === false ? 'Show to Students' : 'Hide from Students'}
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {teacherTests.length === 0 && (
+              <div className="py-10 text-center text-slate-400 font-black uppercase tracking-widest text-[10px] border border-dashed border-slate-200 rounded-[2rem] bg-slate-50/50">
+                No tests created yet
+              </div>
+            )}
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredQuestions.map((q) => {
             const isSelected = selectedIds.includes(q.id);
@@ -331,7 +482,7 @@ export default function TestCreator() {
                     <div className="flex gap-2 mb-3">
                        <span className="text-[10px] font-black uppercase tracking-widest text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded leading-none">{q.subject}</span>
                     </div>
-                    <p className="font-bold text-slate-800 leading-relaxed line-clamp-3">{q.text}</p>
+                    <MathRenderer content={q.text} className="font-bold text-slate-800 leading-relaxed text-sm line-clamp-3" />
                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-4 italic">{q.chapter}</p>
                   </div>
                 </div>

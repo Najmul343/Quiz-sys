@@ -1,47 +1,113 @@
-import { useState, useMemo } from 'react';
-import { db } from '../lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { useState, useEffect } from 'react';
+import { db, auth } from '../lib/firebase';
+import { collection, query, where, getDocs, orderBy, doc, getDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  GraduationCap, Clock, ShieldCheck, ArrowRight, LogOut, History,
-  LayoutDashboard, Loader2, BrainCircuit, Target, CheckCircle2,
-  XCircle, Eye, FileText, X, TrendingUp, Award
+  GraduationCap, 
+  Clock, 
+  ShieldCheck, 
+  ArrowRight, 
+  LogOut,
+  History,
+  LayoutDashboard,
+  Loader2,
+  BrainCircuit,
+  Target,
+  CheckCircle2,
+  XCircle,
+  Eye,
+  FileText,
+  X,
+  TrendingUp,
+  Award
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { cn } from '../lib/utils';
+import { cn, getDirectImageUrl } from '../lib/utils';
 import MathRenderer from '../components/MathRenderer';
-import { useAuth } from '../context/AuthContext';
-import { auth } from '../lib/firebase';
-import { useStudentTests, useStudentSubmissions, usePracticeProgress } from '../hooks/useQueries';
 
 import { 
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area
+  LineChart, 
+  Line, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer,
+  AreaChart,
+  Area
 } from 'recharts';
 
 export default function StudentDashboard() {
-  const { user, profile } = useAuth();
-  const collegeId = profile?.collegeId;
-  
-  const { data: tests = [], isLoading: loadingTests } = useStudentTests(collegeId);
-  const { data: submissions = [], isLoading: loadingSubs } = useStudentSubmissions(user?.uid);
-  const { data: progress = {}, isLoading: loadingProg } = usePracticeProgress(user?.uid);
-  
+  const [tests, setTests] = useState<any[]>([]);
+  const [submissions, setSubmissions] = useState<any[]>([]);
   const [questions, setQuestions] = useState<Record<string, any>>({});
+  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'live' | 'history'>('live');
   const [viewingResult, setViewingResult] = useState<any>(null);
+  const [progress, setProgress] = useState<Record<string, any>>({});
+  const [growthData, setGrowthData] = useState<any[]>([]);
+  const [officialName, setOfficialName] = useState("");
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    try {
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+      const userData = userDoc.data();
+      setOfficialName(userData?.officialName || userData?.displayName || auth.currentUser?.displayName || "");
+      const collegeId = userData?.collegeId;
+
+      if (!collegeId) return;
+
+      // 1 & 2 Parallelized for speed
+      const [testSnap, subSnap] = await Promise.all([
+        getDocs(query(
+          collection(db, 'tests'), 
+          where('status', '==', 'active'),
+          where('collegeId', '==', collegeId),
+          orderBy('createdAt', 'desc')
+        )),
+        getDocs(query(
+          collection(db, 'submissions'),
+          where('studentId', '==', auth.currentUser?.uid),
+          orderBy('submittedAt', 'desc')
+        ))
+      ]);
+
+      const testList = testSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+      setTests(testList);
+
+      const subList = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+      setSubmissions(subList);
+
+      // 4. Fetch Progress for Practice Tests
+      if (auth.currentUser) {
+        const progSnap = await getDocs(query(collection(db, 'practice_progress'), where('studentId', '==', auth.currentUser.uid)));
+        const progMap: Record<string, any> = {};
+        progSnap.docs.forEach(d => { progMap[d.data().testId] = d.data(); });
+        setProgress(progMap);
+      }
+
+      // 3. Performance Trend
+      const trend = [...subList].reverse().map((s, i) => ({
+        iteration: i + 1,
+        score: Math.round(s.percentage || (s.score/s.total*100)),
+        title: testList.find(t => t.id === (s as any).testId)?.title || 'Test'
+      }));
+      setGrowthData(trend);
+
+      // 4. Questions are now fetched on-demand in handleFullSheet to avoid bulk download
+
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const [loadingSheet, setLoadingSheet] = useState(false);
-
-  const loading = loadingTests || loadingSubs || loadingProg;
-
-  const growthData = useMemo(() => {
-    return [...submissions].reverse().map((s, i) => ({
-      iteration: i + 1,
-      score: Math.round(s.percentage || (s.score/s.total*100)),
-      title: tests.find(t => t.id === s.testId)?.title || 'Test'
-    }));
-  }, [submissions, tests]);
-
-  const officialName = profile?.displayName || user?.displayName || "";
 
   const handleFullSheet = async (sub: any) => {
     setLoadingSheet(true);
@@ -335,19 +401,57 @@ export default function StudentDashboard() {
                         )}
                         <div className="relative z-10">
                           <p className="text-[9px] font-black text-slate-300 uppercase mb-2">Item #{idx + 1}</p>
-                          <MathRenderer content={qData?.text || 'Historical data point unavailable'} className="font-black text-slate-900 leading-tight mb-4 pr-12 text-lg" />
+                          <div className="flex-1 mb-4">
+                            <MathRenderer content={qData?.text || 'Historical data point unavailable'} className="font-black text-slate-900 leading-tight pr-12 text-lg" />
+                            {qData?.imageUrl && (
+                              <div className="mt-4 w-full h-32 bg-white rounded-xl overflow-hidden border border-slate-100">
+                                <img src={getDirectImageUrl(qData.imageUrl)} alt="Question" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                              </div>
+                            )}
+                          </div>
+                          
                           <div className="flex gap-8">
                              <div>
                                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Input</p>
                                 <span className={cn("px-3 py-1 rounded-lg text-xs font-black", isCorrect ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600')}>{answer}</span>
-                                {qData?.options?.[answer] && <MathRenderer content={qData.options[answer]} className="mt-2 text-[10px] font-medium opacity-70" />}
+                                {qData?.options?.[answer] && (
+                                  <div className="mt-2">
+                                    <MathRenderer content={qData.options[answer]} className="text-[10px] font-medium opacity-70" />
+                                    {qData.optionImages?.[answer] && (
+                                      <div className="mt-2 w-full h-20 bg-white rounded-lg border border-slate-100 overflow-hidden">
+                                        <img src={getDirectImageUrl(qData.optionImages[answer])} alt={`Option ${answer}`} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                              </div>
                              <div>
                                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Validation Key</p>
                                 <span className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-black">{qData?.answer}</span>
-                                {qData?.options?.[qData.answer] && <MathRenderer content={qData.options[qData.answer]} className="mt-2 text-[10px] font-medium opacity-70" />}
+                                {qData?.options?.[qData.answer] && (
+                                  <div className="mt-2">
+                                    <MathRenderer content={qData.options[qData.answer]} className="text-[10px] font-medium opacity-70" />
+                                    {qData.optionImages?.[qData.answer] && (
+                                      <div className="mt-2 w-full h-20 bg-white rounded-lg border border-slate-100 overflow-hidden">
+                                        <img src={getDirectImageUrl(qData.optionImages[qData.answer])} alt={`Option ${qData.answer}`} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                              </div>
                           </div>
+
+                          {qData?.explanation && (
+                            <div className="mt-6 p-5 bg-indigo-50/50 rounded-2xl border border-indigo-100">
+                               <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">Academic Rationale</p>
+                               <MathRenderer content={qData.explanation} className="text-sm text-indigo-900" />
+                               {qData.explanationImageUrl && (
+                                 <div className="mt-3 w-full h-32 bg-white rounded-xl border border-indigo-100 overflow-hidden">
+                                    <img src={getDirectImageUrl(qData.explanationImageUrl)} alt="Explanation" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                                 </div>
+                               )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     );

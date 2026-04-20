@@ -26,7 +26,7 @@ import {
   FileText,
   Printer
 } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { cn, getDirectImageUrl } from '../../lib/utils';
 import { 
   LineChart, 
   Line, 
@@ -509,21 +509,57 @@ export default function TeacherReports() {
                     return (
                       <div key={qId} className="group p-6 bg-slate-50 rounded-3xl border border-transparent hover:border-slate-200 transition-all">
                         <div className="flex justify-between items-start gap-4 mb-4">
-                          <MathRenderer content={qData?.text || 'Deleted Question Data'} className="font-black text-slate-900 leading-tight flex-1 text-lg" />
+                          <div className="flex-1">
+                            <MathRenderer content={qData?.text || 'Deleted Question Data'} className="font-black text-slate-900 leading-tight text-lg" />
+                            {qData?.imageUrl && (
+                              <div className="mt-4 w-full h-32 bg-white rounded-xl overflow-hidden border border-slate-100">
+                                <img src={getDirectImageUrl(qData.imageUrl)} alt="Question" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                              </div>
+                            )}
+                          </div>
                           {isCorrect ? <CheckCircle2 className="text-emerald-500 flex-shrink-0" /> : <XCircle className="text-rose-500 flex-shrink-0" />}
                         </div>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-2 gap-4">
                            <div className="text-[10px] uppercase tracking-widest">
                               <span className="text-slate-400 font-bold">Student Res:</span> 
                               <span className={cn("ml-2 font-black", isCorrect ? 'text-emerald-600' : 'text-rose-600')}>{answer}</span>
-                              {qData?.options?.[answer] && <MathRenderer content={qData.options[answer]} className="mt-1 text-[9px] lowercase opacity-60" />}
+                              {qData?.options?.[answer] && (
+                                <div className="mt-2">
+                                  <MathRenderer content={qData.options[answer]} className="text-[9px] lowercase opacity-60" />
+                                  {qData.optionImages?.[answer] && (
+                                    <div className="mt-2 w-full h-20 bg-white rounded-lg border border-slate-100 overflow-hidden">
+                                      <img src={getDirectImageUrl(qData.optionImages[answer])} alt={`Opt ${answer}`} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                            </div>
                            <div className="text-[10px] uppercase tracking-widest">
                               <span className="text-slate-400 font-bold">Key Matrix:</span> 
                               <span className="ml-2 font-black text-indigo-600">{qData?.answer}</span>
-                              {qData?.options?.[qData.answer] && <MathRenderer content={qData.options[qData.answer]} className="mt-1 text-[9px] lowercase opacity-60" />}
+                              {qData?.options?.[qData.answer] && (
+                                <div className="mt-2">
+                                  <MathRenderer content={qData.options[qData.answer]} className="text-[9px] lowercase opacity-60" />
+                                  {qData.optionImages?.[qData.answer] && (
+                                    <div className="mt-2 w-full h-20 bg-white rounded-lg border border-slate-100 overflow-hidden">
+                                      <img src={getDirectImageUrl(qData.optionImages[qData.answer])} alt={`Opt ${qData.answer}`} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                            </div>
                         </div>
+                        {qData?.explanation && (
+                          <div className="mt-4 p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100">
+                             <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest mb-1">Explanation</p>
+                             <MathRenderer content={qData.explanation} className="text-xs text-indigo-900" />
+                             {qData.explanationImageUrl && (
+                               <div className="mt-2 w-full h-32 bg-white rounded-xl border border-indigo-100 overflow-hidden">
+                                  <img src={getDirectImageUrl(qData.explanationImageUrl)} alt="Explanation" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                               </div>
+                             )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}

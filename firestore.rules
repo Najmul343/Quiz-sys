@@ -94,7 +94,7 @@ service cloud.firestore {
       }
 
       allow read: if isSignedIn();
-      allow create: if (isPrincipal(incoming().collegeId) || isTeacherAt(incoming().collegeId)) && isValidQuestion(incoming());
+      allow create: if (isSuperAdmin() || isPrincipal(incoming().collegeId) || isTeacherAt(incoming().collegeId)) && isValidQuestion(incoming());
       allow update: if (isSuperAdmin() || (isSignedIn() && (isPrincipal(existing().collegeId) || (isTeacherAt(existing().collegeId) && existing().createdBy == request.auth.uid)))) && isValidQuestion(incoming());
       allow delete: if isSuperAdmin() || (isSignedIn() && (isPrincipal(existing().collegeId) || (isTeacherAt(existing().collegeId) && existing().createdBy == request.auth.uid)));
     }
@@ -109,7 +109,7 @@ service cloud.firestore {
       }
 
       allow read: if isSignedIn();
-      allow create: if (isPrincipal(incoming().collegeId) || isTeacherAt(incoming().collegeId)) && isValidTest(incoming()) && (incoming().teacherId == request.auth.uid || isPrincipal(incoming().collegeId));
+      allow create: if (isSuperAdmin() || isPrincipal(incoming().collegeId) || isTeacherAt(incoming().collegeId)) && isValidTest(incoming()) && (isSuperAdmin() || incoming().teacherId == request.auth.uid || isPrincipal(incoming().collegeId));
       allow update: if (isSuperAdmin() || isPrincipal(existing().collegeId) || (isTeacherAt(existing().collegeId) && existing().teacherId == request.auth.uid)) && isValidTest(incoming());
       allow delete: if isSuperAdmin() || isPrincipal(existing().collegeId) || (isTeacherAt(existing().collegeId) && existing().teacherId == request.auth.uid);
     }
@@ -146,6 +146,59 @@ service cloud.firestore {
       allow create: if (isPrincipal(incoming().collegeId) || isSuperAdmin()) && isValidClass(incoming());
       allow update: if (isPrincipal(existing().collegeId) || isSuperAdmin()) && isValidClass(incoming());
       allow delete: if (isPrincipal(existing().collegeId) || isSuperAdmin());
+    }
+
+    // --- Attendance Rules ---
+    // Collection used by Teacher/Principal/SuperAdmin dashboards to store daily attendance.
+    match /attendance/{attendanceId} {
+      function isValidAttendance(data) {
+        return data.collegeId is string &&
+               data.collegeId.size() > 0 &&
+               data.date is string &&
+               data.date.size() > 0 &&
+               data.studentId is string &&
+               data.studentId.size() > 0 &&
+               data.status in ['present', 'absent', 'late'] &&
+               data.updatedAt is timestamp;
+      }
+
+      // Important: attendance must not hard-fail for legacy teacher/principal accounts
+      // that have not finished UID profile migration. Enforce only signed-in access here
+      // and validate the attendance payload itself.
+      allow read: if isSignedIn();
+
+      allow create, update: if isSignedIn() && isValidAttendance(incoming());
+
+      allow delete: if isSuperAdmin() || (existing().collegeId is string && isPrincipal(existing().collegeId));
+    }
+
+    // --- Practice Progress Rules ---
+    // Used by Practice tests to autosave answers/review flags for a student.
+    match /practice_progress/{progressId} {
+      function isOwnerProgressId() {
+        return isSignedIn() && progressId.matches('^' + request.auth.uid + '_');
+      }
+
+      function isValidPracticeProgress(data) {
+        return data.studentId is string &&
+               data.studentId.size() > 0 &&
+               data.testId is string &&
+               data.testId.size() > 0 &&
+               data.answers is map &&
+               data.reviewIds is list &&
+               data.currentIdx is int &&
+               data.lastUpdated is timestamp;
+      }
+
+      // Allow reading your own progress doc even if it doesn't exist yet (so getDoc returns empty instead of PERMISSION_DENIED).
+      allow read: if isSuperAdmin() || isOwnerProgressId();
+
+      allow create, update: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isOwnerProgressId() && incoming().studentId == request.auth.uid && isValidPracticeProgress(incoming()))
+      );
+
+      allow delete: if isSuperAdmin() || existing().studentId == request.auth.uid;
     }
   }
 }

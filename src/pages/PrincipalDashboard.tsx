@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../lib/firebase';
-import { collection, query, getDocs, where, addDoc, serverTimestamp, doc, getDoc, setDoc, orderBy, limit, deleteDoc, getCountFromServer, updateDoc } from 'firebase/firestore';
+import { collection, query, getDocs, where, addDoc, serverTimestamp, doc, getDoc, setDoc, limit, deleteDoc, getCountFromServer, updateDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Users, 
@@ -20,11 +20,14 @@ import {
   CheckCircle2,
   AlertTriangle,
   Trash2,
-  UserCheck
+  UserCheck,
+  CalendarDays,
+  Clock3
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { signOut } from 'firebase/auth';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 import { 
   LineChart, 
@@ -43,9 +46,11 @@ import {
 
 import QuestionBank from './teacher/QuestionBank';
 import TestCreator from './teacher/TestCreator';
+import TeacherReports from './teacher/Reports';
 
 export default function PrincipalDashboard() {
   const navigate = useNavigate();
+  const { profile } = useAuth();
   const [stats, setStats] = useState({
     totalTeachers: 0,
     totalStudents: 0,
@@ -58,18 +63,44 @@ export default function PrincipalDashboard() {
   const [showTeacherModal, setShowTeacherModal] = useState(false);
   const [showClassModal, setShowClassModal] = useState(false);
   const [teachers, setTeachers] = useState<any[]>([]);
+  const [students, setStudents] = useState<any[]>([]);
   const [recentSubmissions, setRecentSubmissions] = useState<any[]>([]);
   const [newTeacher, setNewTeacher] = useState({ name: '', email: '' });
   const [editingTeacher, setEditingTeacher] = useState<any>(null);
   const [newClass, setNewClass] = useState({ name: '', teacherId: '' });
   const [showSettings, setShowSettings] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'bank' | 'tests'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'bank' | 'tests' | 'reports'>('dashboard');
   const [saving, setSaving] = useState(false);
   const [performanceData, setPerformanceData] = useState<any[]>([]);
   const [teacherMetrics, setTeacherMetrics] = useState<Record<string, any>>({});
+  const [attendanceOverview, setAttendanceOverview] = useState({ date: '', present: 0, late: 0, absent: 0, pending: 0 });
+  const [attendanceDate, setAttendanceDate] = useState(new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10));
+  const [attendanceRecords, setAttendanceRecords] = useState<Record<string, 'present' | 'absent' | 'late'>>({});
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceSavingStudentId, setAttendanceSavingStudentId] = useState<string | null>(null);
+  const [testOverview, setTestOverview] = useState<any[]>([]);
   const [settings, setSettings] = useState({ collegeName: '', location: '' });
   const [status, setStatus] = useState<{type: 'success' | 'error', message: string} | null>(null);
   const [confirmDeleteTeacher, setConfirmDeleteTeacher] = useState<string | null>(null);
+
+  const getAttendanceDocId = (collegeId: string, date: string, studentId: string) => `${collegeId}_${date}_${studentId}`;
+  const sanitizeLegacyDocId = (value?: string | null) => (value || '').toLowerCase().trim().replace(/[^a-zA-Z0-9]/g, '_');
+  const dedupeById = <T extends { id: string }>(items: T[]) => Array.from(new Map(items.map((item) => [item.id, item])).values());
+  const teacherScopeIds = Array.from(
+    new Set(
+      teachers.flatMap((teacher: any) => [teacher.id, teacher.uid, sanitizeLegacyDocId(teacher.email)]).filter(
+        (value): value is string => !!value
+      )
+    )
+  );
+
+  const getAttendanceErrorMessage = (error: unknown, fallback: string) => {
+    const message = error instanceof Error ? error.message.toLowerCase() : '';
+    if (message.includes('missing or insufficient permissions')) {
+      return "Attendance permissions are blocked in Firestore for this account.";
+    }
+    return fallback;
+  };
 
   useEffect(() => {
     if (status) {
@@ -79,26 +110,109 @@ export default function PrincipalDashboard() {
   }, [status]);
 
   useEffect(() => {
-    fetchDashboardData();
-  }, []);
+    if (profile?.collegeId) {
+      fetchDashboardData(profile.collegeId);
+    }
+  }, [profile]);
 
-  const fetchDashboardData = async () => {
+  useEffect(() => {
+    if (profile?.collegeId && students.length) {
+      fetchAttendanceRegister(profile.collegeId, attendanceDate, students);
+    } else {
+      setAttendanceRecords({});
+    }
+  }, [profile?.collegeId, attendanceDate, students]);
+
+  const fetchAttendanceRegister = async (collegeId: string, targetDate: string, studentList: any[]) => {
+    setAttendanceLoading(true);
+    try {
+      const attendanceDocs = await Promise.all(
+        studentList.map((student) =>
+          getDoc(doc(db, 'attendance', getAttendanceDocId(collegeId, targetDate, student.id)))
+        )
+      );
+
+      const records: Record<string, 'present' | 'absent' | 'late'> = {};
+      attendanceDocs.forEach((attendanceDoc) => {
+        if (attendanceDoc.exists()) {
+          const data = attendanceDoc.data() as any;
+          if (data.studentId && data.status) {
+            records[data.studentId] = data.status;
+          }
+        }
+      });
+
+      setAttendanceRecords(records);
+      setAttendanceOverview({
+        date: targetDate,
+        present: Object.values(records).filter((status) => status === 'present').length,
+        late: Object.values(records).filter((status) => status === 'late').length,
+        absent: Object.values(records).filter((status) => status === 'absent').length,
+        pending: Math.max(studentList.length - Object.keys(records).length, 0),
+      });
+    } catch (error) {
+      console.error(error);
+      setStatus({ type: 'error', message: getAttendanceErrorMessage(error, "Attendance analytics could not be synchronized.") });
+    } finally {
+      setAttendanceLoading(false);
+    }
+  };
+
+  const markAttendance = async (student: any, statusValue: 'present' | 'absent' | 'late') => {
+    if (!profile?.collegeId) return;
+    try {
+      setAttendanceSavingStudentId(student.id);
+      await setDoc(doc(db, 'attendance', getAttendanceDocId(profile.collegeId, attendanceDate, student.id)), {
+        collegeId: profile.collegeId,
+        date: attendanceDate,
+        studentId: student.id,
+        studentName: student.officialName || student.displayName,
+        studentRollNo: student.rollNo || '',
+        status: statusValue,
+        teacherId: auth.currentUser?.uid,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+
+      const nextRecords = { ...attendanceRecords, [student.id]: statusValue };
+      setAttendanceRecords(nextRecords);
+      setAttendanceOverview({
+        date: attendanceDate,
+        present: Object.values(nextRecords).filter((status) => status === 'present').length,
+        late: Object.values(nextRecords).filter((status) => status === 'late').length,
+        absent: Object.values(nextRecords).filter((status) => status === 'absent').length,
+        pending: Math.max(students.length - Object.keys(nextRecords).length, 0),
+      });
+    } catch (error) {
+      console.error(error);
+      setStatus({ type: 'error', message: getAttendanceErrorMessage(error, "Attendance update failed.") });
+    } finally {
+      setAttendanceSavingStudentId(null);
+    }
+  };
+
+  const fetchDashboardData = async (collegeIdArg?: string) => {
     try {
       setLoading(true);
-      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
-      const userData = userDoc.data();
+      const collegeId = collegeIdArg || profile?.collegeId;
       
-      if (userData?.collegeId) {
+      if (collegeId) {
         // Parallelize independent queries
         const queries = [
-          getDoc(doc(db, 'colleges', userData.collegeId)),
-          getDocs(query(collection(db, 'users'), where('collegeId', '==', userData.collegeId), where('role', '==', 'teacher'))),
-          getDocs(query(collection(db, 'users'), where('collegeId', '==', userData.collegeId), where('role', '==', 'student'))),
-          getDocs(query(collection(db, 'tests'), where('collegeId', '==', userData.collegeId))),
-          getDocs(query(collection(db, 'submissions'), where('collegeId', '==', userData.collegeId), orderBy('submittedAt', 'desc')))
+          getDoc(doc(db, 'colleges', collegeId)),
+          getDocs(query(collection(db, 'users'), where('collegeId', '==', collegeId), where('role', '==', 'teacher'))),
+          getDocs(query(collection(db, 'users'), where('collegeId', '==', collegeId), where('role', '==', 'student'))),
+          getDocs(query(collection(db, 'tests'), where('collegeId', '==', collegeId))),
+          getDocs(query(collection(db, 'submissions'), where('collegeId', '==', collegeId)))
         ];
 
-        const [cSnap, teachersSnap, studentsSnap, testsSnap, allSubSnap] = await Promise.all(queries) as [any, any, any, any, any];
+        const [cRes, teachersRes, studentsRes, testsRes, subRes] = await Promise.allSettled(queries);
+        if (cRes.status !== 'fulfilled') throw cRes.reason;
+
+        const cSnap = cRes.value as any;
+        const teachersSnap = (teachersRes.status === 'fulfilled' ? teachersRes.value : { docs: [] }) as any;
+        const studentsSnap = (studentsRes.status === 'fulfilled' ? studentsRes.value : { docs: [] }) as any;
+        const testsSnap = (testsRes.status === 'fulfilled' ? testsRes.value : { docs: [] }) as any;
+        const allSubSnap = (subRes.status === 'fulfilled' ? subRes.value : { docs: [] }) as any;
         
         const cData = cSnap.data();
         setCollegeData({ id: cSnap.id, ...cData });
@@ -108,21 +222,59 @@ export default function PrincipalDashboard() {
         const teacherList = teachersSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
         setTeachers(teacherList);
         
-        // 2. Students (Handled in stats)
+        // 2. Students
+        const studentList = studentsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+        studentList.sort((a: any, b: any) => String(a.rollNo || '').localeCompare(String(b.rollNo || ''), undefined, { numeric: true, sensitivity: 'base' }));
+        setStudents(studentList);
 
         // 3. Tests
-        const testList = testsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+        const teacherIdentityMap = new Map<string, string[]>();
+        teacherList.forEach((teacher: any) => {
+          const teacherIds = Array.from(
+            new Set(
+              [teacher.id, teacher.uid, sanitizeLegacyDocId(teacher.email)].filter(
+                (value): value is string => typeof value === 'string' && value.length > 0
+              )
+            )
+          );
+          teacherIdentityMap.set(teacher.id, teacherIds);
+        });
+
+        const teacherScopedTestQueries = Array.from(
+          new Set(Array.from(teacherIdentityMap.values()).flat())
+        ).map((teacherId) => getDocs(query(collection(db, 'tests'), where('teacherId', '==', teacherId))));
+
+        const teacherScopedResults = teacherScopedTestQueries.length
+          ? await Promise.allSettled(teacherScopedTestQueries)
+          : [];
+
+        const collegeTests = testsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+        const teacherScopedTests = teacherScopedResults.flatMap((result) =>
+          result.status === 'fulfilled'
+            ? result.value.docs.map((testDoc) => ({ id: testDoc.id, ...testDoc.data() }))
+            : []
+        ) as any[];
+
+        const testList = dedupeById(
+          [...collegeTests, ...teacherScopedTests].filter((test: any) => {
+            if (test.collegeId === collegeId) return true;
+            if (test.collegeId) return false;
+            return Array.from(teacherIdentityMap.values()).some((ids) => ids.includes(test.teacherId));
+          })
+        );
 
         // 4. Submissions (Recent)
         const allSubs = allSubSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
-        setRecentSubmissions(allSubs.slice(0, 10)); // Top 10 for display
+        const sortedSubs = [...allSubs].sort((a: any, b: any) => (b.submittedAt?.seconds || 0) - (a.submittedAt?.seconds || 0));
+        setRecentSubmissions(sortedSubs.slice(0, 10)); // Top 10 for display
 
         // Insights Logic
         const passCount = allSubs.filter((d: any) => d.status === 'PASS').length;
         
         const metrics: Record<string, any> = {};
         teacherList.forEach(t => {
-          const tTests = testList.filter((test: any) => test.teacherId === t.id);
+          const teacherIds = teacherIdentityMap.get(t.id) || [t.id];
+          const tTests = testList.filter((test: any) => teacherIds.includes(test.teacherId));
           const tSubs = allSubs.filter((s: any) => tTests.some(test => test.id === s.testId));
           metrics[t.id] = {
             testCount: tTests.length,
@@ -132,8 +284,31 @@ export default function PrincipalDashboard() {
         });
         setTeacherMetrics(metrics);
 
+        await fetchAttendanceRegister(collegeId, attendanceDate, studentList);
+
+        const testRows = testList.map((test: any) => {
+          const relatedSubs = allSubs.filter((submission: any) => submission.testId === test.id);
+          const avgScore = relatedSubs.length
+            ? Math.round(relatedSubs.reduce((acc: number, submission: any) => acc + (submission.percentage || (submission.score / submission.total) * 100), 0) / relatedSubs.length)
+            : 0;
+          const passRate = relatedSubs.length
+            ? Math.round((relatedSubs.filter((submission: any) => submission.status === 'PASS').length / relatedSubs.length) * 100)
+            : 0;
+
+          return {
+            id: test.id,
+            title: test.title,
+            visible: test.visible !== false,
+            submissions: relatedSubs.length,
+            avgScore,
+            passRate,
+            isPractice: !!test.isPractice,
+          };
+        });
+        setTestOverview(testRows.sort((a, b) => b.submissions - a.submissions).slice(0, 6));
+
         // Performance Trend (last 6 months or similar, simplified for now)
-        const trend = allSubs.slice(0, 50).reverse().map((s: any, i: number) => ({
+        const trend = sortedSubs.slice(0, 50).reverse().map((s: any, i: number) => ({
           name: i,
           score: s.percentage || 0
         }));
@@ -142,14 +317,14 @@ export default function PrincipalDashboard() {
         setStats({
           totalTeachers: teachersSnap.size,
           totalStudents: studentsSnap.size,
-          totalTests: testsSnap.size,
+          totalTests: testList.length,
           overallPassRate: allSubs.length ? Math.round((passCount / allSubs.length) * 100) : 0,
           totalSubmissions: allSubs.length
         });
       }
     } catch (e) {
       console.error(e);
-      setStatus({ type: 'error', message: "System core failing to fetch analytic metadata." });
+      setStatus({ type: 'error', message: e instanceof Error ? e.message : "System core failing to fetch analytic metadata." });
     } finally {
       setLoading(false);
     }
@@ -314,7 +489,16 @@ export default function PrincipalDashboard() {
     }
   };
 
-  if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-emerald-600" /></div>;
+  if (loading) return (
+    <div className="min-h-screen bg-[#F8FAFC] p-8 space-y-8">
+      <div className="h-20 rounded-[2rem] bg-white border border-slate-100 shadow-xl shadow-slate-100 animate-pulse" />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-32 rounded-[2.5rem] bg-white border border-slate-100 shadow-xl shadow-slate-100 animate-pulse" />)}
+      </div>
+      <div className="h-[22rem] rounded-[3rem] bg-white border border-slate-100 shadow-xl shadow-slate-100 animate-pulse" />
+      <div className="h-[24rem] rounded-[3rem] bg-white border border-slate-100 shadow-xl shadow-slate-100 animate-pulse" />
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-[#FDFDFD]">
@@ -336,6 +520,7 @@ export default function PrincipalDashboard() {
               { id: 'dashboard' as const, label: 'Analytics', icon: BarChart3 },
               { id: 'bank' as const, label: 'Question Bank', icon: BookOpen },
               { id: 'tests' as const, label: 'Test Management', icon: ShieldCheck },
+              { id: 'reports' as const, label: 'Report Sheets', icon: TrendingUp },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -427,6 +612,158 @@ export default function PrincipalDashboard() {
               <p className="text-3xl font-black text-slate-800 tracking-tighter">{item.value}</p>
             </motion.div>
           ))}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-slate-200/40">
+            <div className="flex justify-between items-start mb-8">
+              <div>
+                <h3 className="text-xl font-black uppercase tracking-tight text-slate-800">Today Attendance Pulse</h3>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Principal can audit or change any student's status for {attendanceOverview.date || attendanceDate}</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 px-4 py-3 bg-slate-50 rounded-2xl border border-slate-100">
+                  <CalendarDays size={16} className="text-indigo-600" />
+                  <input
+                    type="date"
+                    value={attendanceDate}
+                    onChange={(e) => setAttendanceDate(e.target.value)}
+                    className="bg-transparent text-[11px] font-black uppercase tracking-widest text-slate-600 outline-none"
+                  />
+                </div>
+                <div className="px-4 py-2 rounded-2xl bg-slate-50 border border-slate-100 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                  {stats.totalStudents} students
+                </div>
+                {attendanceLoading && <Loader2 className="animate-spin text-indigo-600" size={18} />}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              {[
+                { label: 'Present', value: attendanceOverview.present, tone: 'emerald' },
+                { label: 'Late', value: attendanceOverview.late, tone: 'amber' },
+                { label: 'Absent', value: attendanceOverview.absent, tone: 'rose' },
+                { label: 'Pending', value: attendanceOverview.pending, tone: 'slate' },
+              ].map(item => (
+                <div key={item.label} className="p-5 rounded-[2rem] border border-slate-100 bg-slate-50/70">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{item.label}</p>
+                  <p className="text-3xl font-black text-slate-900 mt-2">{item.value}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-6 max-h-[360px] overflow-y-auto pr-1 space-y-3">
+              {students.slice(0, 16).map((student) => (
+                <div key={student.id} className="p-4 rounded-[1.6rem] border border-slate-100 bg-slate-50/60">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="font-black text-slate-800 uppercase tracking-tight truncate">{student.officialName || student.displayName}</p>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1 truncate">
+                        {student.rollNo || 'No Roll'} {student.trade ? `• ${student.trade}` : ''}
+                      </p>
+                    </div>
+                    <span className={cn(
+                      "px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border shrink-0",
+                      attendanceRecords[student.id] === 'present' && "bg-emerald-50 text-emerald-600 border-emerald-100",
+                      attendanceRecords[student.id] === 'late' && "bg-amber-50 text-amber-600 border-amber-100",
+                      attendanceRecords[student.id] === 'absent' && "bg-rose-50 text-rose-600 border-rose-100",
+                      !attendanceRecords[student.id] && "bg-white text-slate-500 border-slate-100"
+                    )}>
+                      {attendanceRecords[student.id] || 'pending'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 mt-4">
+                    {[
+                      { key: 'present' as const, label: 'Present', icon: UserCheck },
+                      { key: 'late' as const, label: 'Late', icon: Clock3 },
+                      { key: 'absent' as const, label: 'Absent', icon: AlertTriangle },
+                    ].map((option) => (
+                      <button
+                        key={`${student.id}-${option.key}`}
+                        type="button"
+                        onClick={() => markAttendance(student, option.key)}
+                        disabled={attendanceSavingStudentId === student.id}
+                        className={cn(
+                          "py-3 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2",
+                          attendanceRecords[student.id] === option.key
+                            ? option.key === 'present'
+                              ? "bg-emerald-600 text-white border-emerald-600"
+                              : option.key === 'late'
+                                ? "bg-amber-500 text-white border-amber-500"
+                                : "bg-rose-600 text-white border-rose-600"
+                            : "bg-white text-slate-500 border-slate-200 hover:border-slate-300",
+                          attendanceSavingStudentId === student.id && "opacity-60 cursor-wait"
+                        )}
+                      >
+                        {attendanceSavingStudentId === student.id ? <Loader2 size={12} className="animate-spin" /> : <option.icon size={12} />}
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+
+              {students.length === 0 && (
+                <div className="py-10 text-center text-slate-400 font-bold uppercase tracking-widest text-[10px] border border-dashed border-slate-200 rounded-[2rem] bg-slate-50/50">
+                  No students found for attendance editing
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-slate-200/40">
+            <div className="flex justify-between items-start mb-8">
+              <div>
+                <h3 className="text-xl font-black uppercase tracking-tight text-slate-800">Test Control Snapshot</h3>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">High-level performance and visibility across the latest tests</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {testOverview.map(test => (
+                <div key={test.id} className="p-4 rounded-[2rem] border border-slate-100 bg-slate-50/60">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="font-black text-slate-800 uppercase tracking-tight truncate">{test.title}</p>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        <span className={cn(
+                          "px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border",
+                          test.visible ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-rose-50 text-rose-600 border-rose-100"
+                        )}>
+                          {test.visible ? 'Visible' : 'Hidden'}
+                        </span>
+                        {test.isPractice && (
+                          <span className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border bg-amber-50 text-amber-600 border-amber-100">
+                            Practice
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                      <div>
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Subs</p>
+                        <p className="text-lg font-black text-slate-900">{test.submissions}</p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Avg</p>
+                        <p className="text-lg font-black text-indigo-600">{test.avgScore}%</p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Pass</p>
+                        <p className="text-lg font-black text-rose-600">{test.passRate}%</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {testOverview.length === 0 && (
+                <div className="py-10 text-center text-slate-400 font-bold uppercase tracking-widest text-[10px] border border-dashed border-slate-200 rounded-[2rem] bg-slate-50/50">
+                  No test analytics yet
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Growth Trend for Principal */}
@@ -619,8 +956,21 @@ export default function PrincipalDashboard() {
       </>
     )}
 
-        {activeTab === 'bank' && <QuestionBank />}
-        {activeTab === 'tests' && <TestCreator />}
+        {activeTab === 'bank' && <QuestionBank collegeIdOverride={profile?.collegeId} mode="principal" />}
+        {activeTab === 'tests' && (
+          <TestCreator
+            collegeIdOverride={profile?.collegeId}
+            viewerMode="college"
+            teacherIdsOverride={teacherScopeIds}
+          />
+        )}
+        {activeTab === 'reports' && (
+          <TeacherReports
+            collegeIdOverride={profile?.collegeId}
+            scopeMode="college"
+            teacherIdsOverride={teacherScopeIds}
+          />
+        )}
       </main>
 
       {/* Modals */}
