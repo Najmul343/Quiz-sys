@@ -130,12 +130,16 @@ export default function QuizSession() {
 
       // Check for saved progress if it's a practice test
       if (testData.isPractice && auth.currentUser) {
-        const progressSnap = await getDoc(doc(db, 'practice_progress', `${auth.currentUser.uid}_${testId}`));
-        if (progressSnap.exists()) {
-          const prog = progressSnap.data();
-          setAnswers(prog.answers || {});
-          setReviewIds(prog.reviewIds || []);
-          setCurrentIdx(prog.currentIdx || 0);
+        try {
+          const progressSnap = await getDoc(doc(db, 'practice_progress', `${auth.currentUser.uid}_${testId}`));
+          if (progressSnap.exists()) {
+            const prog = progressSnap.data();
+            setAnswers(prog.answers || {});
+            setReviewIds(prog.reviewIds || []);
+            setCurrentIdx(prog.currentIdx || 0);
+          }
+        } catch (progressError) {
+          console.warn('Practice progress load skipped:', progressError);
         }
       }
 
@@ -148,7 +152,7 @@ export default function QuizSession() {
       }
 
       // Fetch questions
-      const qPromises = testData.questionIds.map((id: string) => getDoc(doc(db, 'questions', id)));
+      const qPromises = (testData.questionIds || []).map((id: string) => getDoc(doc(db, 'questions', id)));
       const qSnaps = await Promise.all(qPromises);
       let qs = qSnaps.map(s => {
         const data = s.data();
@@ -308,6 +312,26 @@ export default function QuizSession() {
     </div>
   );
 
+  if (!loading && (!test || questions.length === 0)) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-slate-950 p-6">
+        <div className="max-w-md w-full bg-white rounded-[3rem] p-10 shadow-2xl text-center">
+          <Loader2 className="mx-auto mb-4 animate-spin text-indigo-600" size={40} />
+          <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3">Session Unavailable</h2>
+          <p className="text-slate-500 font-medium leading-relaxed mb-8">
+            This test could not be loaded safely. Please go back and try again.
+          </p>
+          <button
+            onClick={() => navigate('/student')}
+            className="px-6 py-4 bg-slate-900 text-white font-black uppercase tracking-widest text-[10px] rounded-2xl"
+          >
+            Back to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (needsName && !studentName) {
     return (
       <div className="h-screen flex items-center justify-center bg-slate-950 p-6">
@@ -352,10 +376,11 @@ export default function QuizSession() {
     );
   }
 
-  const currentQ = questions[currentIdx];
+  const currentQ = questions[currentIdx] || questions[0];
 
   const getStatus = (idx: number) => {
-    const qId = questions[idx].id;
+    const qId = questions[idx]?.id;
+    if (!qId) return 'not-visited';
     const isAnswered = !!answers[qId];
     const isReview = reviewIds.includes(qId);
     
