@@ -10,13 +10,22 @@ export function getDirectImageUrl(url: string) {
   const trimmedUrl = url.trim();
   if (!trimmedUrl) return '';
 
+  if (trimmedUrl.startsWith('data:image/')) {
+    return trimmedUrl;
+  }
+
   // Handle Google Drive
   if (trimmedUrl.includes('drive.google.com')) {
     const fileIdMatch = trimmedUrl.match(/\/d\/([^/]+)/) || trimmedUrl.match(/id=([^&]+)/);
     if (fileIdMatch && fileIdMatch[1]) {
-      return `https://drive.google.com/uc?export=view&id=${fileIdMatch[1]}`;
+      return `/api/image-proxy?url=${encodeURIComponent(`https://drive.google.com/uc?export=view&id=${fileIdMatch[1]}`)}`;
     }
   }
+
+  if (/^https?:\/\//i.test(trimmedUrl)) {
+    return `/api/image-proxy?url=${encodeURIComponent(trimmedUrl)}`;
+  }
+
   return trimmedUrl;
 }
 
