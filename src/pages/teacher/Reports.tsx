@@ -43,10 +43,21 @@ import {
 } from 'recharts';
 import MathRenderer from '../../components/MathRenderer';
 
-export default function TeacherReports() {
+type TeacherReportsProps = {
+  collegeIdOverride?: string;
+  scopeMode?: 'teacher' | 'college';
+  teacherIdsOverride?: string[];
+};
+
+export default function TeacherReports({
+  collegeIdOverride,
+  scopeMode = 'teacher',
+  teacherIdsOverride,
+}: TeacherReportsProps) {
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [tests, setTests] = useState<any[]>([]);
   const [questions, setQuestions] = useState<Record<string, any>>({});
+  const [attendanceRecords, setAttendanceRecords] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTestId, setSelectedTestId] = useState('all');
   const [viewingSubmission, setViewingSubmission] = useState<any>(null);
@@ -54,35 +65,49 @@ export default function TeacherReports() {
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [studentSearch, setStudentSearch] = useState('');
   const [studentDirectory, setStudentDirectory] = useState<Record<string, any>>({});
+  const [attendanceMonth, setAttendanceMonth] = useState(new Date().toISOString().slice(0, 7));
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [collegeIdOverride, scopeMode, teacherIdsOverride]);
 
   const fetchData = async () => {
     try {
       const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
       const userData = userDoc.data();
-      const collegeId = userData?.collegeId;
+      const collegeId = collegeIdOverride || userData?.collegeId;
 
       if (!collegeId) return;
 
+      const teacherFilterIds = teacherIdsOverride?.length ? teacherIdsOverride : [auth.currentUser?.uid].filter(Boolean) as string[];
+      const testQuery = scopeMode === 'college'
+        ? query(collection(db, 'tests'), where('collegeId', '==', collegeId))
+        : teacherFilterIds.length
+          ? query(collection(db, 'tests'), where('collegeId', '==', collegeId), where('teacherId', '==', teacherFilterIds[0]))
+          : query(collection(db, 'tests'), where('collegeId', '==', collegeId));
+
       // Parallelize queries
-      const [testSnap, subSnap, studentSnap] = await Promise.all([
-        getDocs(query(collection(db, 'tests'), where('teacherId', '==', auth.currentUser?.uid), where('collegeId', '==', collegeId))),
+      const [testSnap, subSnap, studentSnap, attendanceSnap] = await Promise.all([
+        getDocs(testQuery),
         getDocs(query(
           collection(db, 'submissions'), 
           where('collegeId', '==', collegeId),
           orderBy('submittedAt', 'desc')
         )),
-        getDocs(query(collection(db, 'users'), where('role', '==', 'student'), where('collegeId', '==', collegeId)))
+        getDocs(query(collection(db, 'users'), where('role', '==', 'student'), where('collegeId', '==', collegeId))),
+        getDocs(query(collection(db, 'attendance'), where('collegeId', '==', collegeId)))
       ]);
 
       const testList = testSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setTests(testList);
+      const filteredTests = scopeMode === 'college'
+        ? testList
+        : teacherFilterIds.length
+          ? testList.filter((test: any) => teacherFilterIds.includes(test.teacherId) || teacherFilterIds.includes(test.uid))
+          : testList;
+      setTests(filteredTests);
 
       const allSubs = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const teacherSubs = allSubs.filter((s: any) => testList.some((t: any) => t.id === s.testId));
+      const teacherSubs = allSubs.filter((s: any) => filteredTests.some((t: any) => t.id === s.testId));
       setSubmissions(teacherSubs);
 
       const studentMap: Record<string, any> = {};
@@ -90,6 +115,8 @@ export default function TeacherReports() {
         studentMap[studentDoc.id] = { id: studentDoc.id, ...studentDoc.data() };
       });
       setStudentDirectory(studentMap);
+
+      setAttendanceRecords(attendanceSnap.docs.map((attendanceDoc) => ({ id: attendanceDoc.id, ...attendanceDoc.data() })));
       
       // Questions are now fetched on-demand in handleViewSubmission
     } catch (e) {
@@ -100,6 +127,23 @@ export default function TeacherReports() {
   };
 
   const [loadingSheet, setLoadingSheet] = useState(false);
+  const attendanceMonthPrefix = `${attendanceMonth}-`;
+  const monthlyAttendanceDocs = useMemo(() => attendanceRecords.filter((record) => String(record.date || '').startsWith(attendanceMonthPrefix)), [attendanceRecords, attendanceMonthPrefix]);
+  const monthlyAttendanceDates = useMemo(() => Array.from(new Set(monthlyAttendanceDocs.map((record) => record.date))).sort(), [monthlyAttendanceDocs]);
+  const monthlyAttendanceRows = useMemo(() => {
+    const studentIds = Array.from(new Set(monthlyAttendanceDocs.map((record) => record.studentId)));
+    return studentIds
+      .map((studentId) => {
+        const student = studentDirectory[studentId];
+        const row: Record<string, any> = { studentId, name: student?.officialName || student?.displayName || 'Student', rollNo: student?.rollNo || '' };
+        monthlyAttendanceDates.forEach((date) => {
+          const record = monthlyAttendanceDocs.find((item) => item.studentId === studentId && item.date === date);
+          row[date] = record?.status || '';
+        });
+        return row;
+      })
+      .sort((a, b) => (a.rollNo || '').localeCompare(b.rollNo || '', undefined, { numeric: true }));
+  }, [monthlyAttendanceDates, monthlyAttendanceDocs, studentDirectory]);
 
   const handleViewSubmission = async (sub: any) => {
     setLoadingSheet(true);
@@ -451,6 +495,81 @@ export default function TeacherReports() {
                <p className="font-black text-slate-400 uppercase tracking-[0.4em] text-xs">Awaiting Class Submissions</p>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Monthly Attendance Sheet */}
+      <div className="bg-white rounded-[3.5rem] border border-slate-100 shadow-2xl shadow-slate-300/40 p-12 overflow-hidden">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-8">
+          <div>
+            <div className="flex items-center gap-4">
+              <div className="w-1.5 h-8 bg-emerald-600 rounded-full" />
+              <h3 className="text-xl font-black uppercase tracking-tight text-slate-800">Monthly Attendance Sheet</h3>
+            </div>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">Student rows with date-wise P / A / L status for the selected month</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 px-4 py-3 bg-slate-50 rounded-2xl border border-slate-100">
+              <Calendar size={16} className="text-emerald-600" />
+              <input
+                type="month"
+                value={attendanceMonth}
+                onChange={(e) => setAttendanceMonth(e.target.value)}
+                className="bg-transparent text-[11px] font-black uppercase tracking-widest text-slate-600 outline-none"
+              />
+            </div>
+            <button
+              onClick={() => window.print()}
+              className="px-5 py-3 bg-emerald-600 text-white font-black text-[10px] uppercase tracking-widest rounded-2xl flex items-center gap-2 shadow-lg shadow-emerald-100"
+            >
+              <Printer size={14} /> Print Month Sheet
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto custom-scrollbar">
+          <table className="w-full border-collapse text-left">
+            <thead>
+              <tr className="border-b border-slate-100">
+                <th className="pb-4 pr-4 text-[10px] font-black uppercase tracking-widest text-slate-400 sticky left-0 bg-white">Roll / Student</th>
+                {monthlyAttendanceDates.map((date) => (
+                  <th key={date} className="pb-4 px-3 text-[10px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">{date.slice(8, 10)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {monthlyAttendanceRows.map((row) => (
+                <tr key={row.studentId} className="hover:bg-slate-50/60 transition-colors">
+                  <td className="py-4 pr-4 sticky left-0 bg-white whitespace-nowrap">
+                    <div>
+                      <p className="font-black text-slate-800 uppercase text-sm tracking-tight">{row.name}</p>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{row.rollNo || 'N/A'}</p>
+                    </div>
+                  </td>
+                  {monthlyAttendanceDates.map((date) => (
+                    <td key={`${row.studentId}-${date}`} className="py-4 px-3">
+                      <span className={cn(
+                        "inline-flex min-w-9 h-9 px-3 items-center justify-center rounded-xl text-[10px] font-black uppercase tracking-widest border",
+                        row[date] === 'present' && "bg-emerald-50 text-emerald-600 border-emerald-100",
+                        row[date] === 'late' && "bg-amber-50 text-amber-600 border-amber-100",
+                        row[date] === 'absent' && "bg-rose-50 text-rose-600 border-rose-100",
+                        !row[date] && "bg-slate-50 text-slate-300 border-slate-100"
+                      )}>
+                        {row[date] ? String(row[date]).slice(0, 1).toUpperCase() : '-'}
+                      </span>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+              {monthlyAttendanceRows.length === 0 && (
+                <tr>
+                  <td colSpan={Math.max(monthlyAttendanceDates.length + 1, 2)} className="py-20 text-center">
+                    <p className="font-black text-slate-400 uppercase tracking-[0.4em] text-xs">No attendance records for this month</p>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 

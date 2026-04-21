@@ -285,7 +285,11 @@ export default function QuizSession() {
       
       // Cleanup progress on full submit
       if (test?.isPractice && auth.currentUser) {
-        await deleteDoc(doc(db, 'practice_progress', `${auth.currentUser.uid}_${testId}`));
+        try {
+          await deleteDoc(doc(db, 'practice_progress', `${auth.currentUser.uid}_${testId}`));
+        } catch (cleanupError) {
+          console.warn('Practice progress cleanup skipped:', cleanupError);
+        }
       }
       
       if (document.fullscreenElement) {
