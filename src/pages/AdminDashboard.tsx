@@ -1,4 +1,5 @@
 import { auth } from '../lib/firebase';
+import { signOut } from 'firebase/auth';
 import { LogOut, ShieldCheck } from 'lucide-react';
 
 export default function AdminDashboard() {
@@ -12,7 +13,7 @@ export default function AdminDashboard() {
         <p className="text-slate-500 font-medium mb-8">System-wide institute management and logs.</p>
         
         <button 
-          onClick={() => auth.signOut()}
+          onClick={() => signOut(auth)}
           className="flex items-center gap-2 bg-slate-900 text-white px-6 py-3 rounded-2xl font-bold"
         >
           <LogOut size={18} />

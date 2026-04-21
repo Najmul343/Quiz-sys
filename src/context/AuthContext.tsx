@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
-import { auth } from '../lib/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
 import { resolveCurrentUserProfile } from '../lib/profileResolver';
 import type { UserProfile } from '../types';
 
@@ -12,15 +13,21 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
+    let detachProfileSnapshot: (() => void) | null = null;
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (detachProfileSnapshot) {
+        detachProfileSnapshot();
+        detachProfileSnapshot = null;
+      }
+
       setUser(currentUser);
 
       if (!currentUser) {
@@ -39,6 +46,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setProfile(resolvedProfile);
           setLoading(false);
         }
+
+        detachProfileSnapshot = onSnapshot(doc(db, 'users', currentUser.uid), (snapshot) => {
+          if (!snapshot.exists() || cancelled) return;
+          const nextProfile = snapshot.data() as UserProfile;
+          setProfile({
+            ...resolvedProfile,
+            ...nextProfile,
+            uid: currentUser.uid,
+            email: nextProfile.email || resolvedProfile.email || currentUser.email || '',
+            displayName: nextProfile.displayName || nextProfile.officialName || resolvedProfile.displayName || currentUser.displayName || '',
+          });
+        });
       } catch (error) {
         console.error('Auth profile resolution failed:', error);
         if (!cancelled) {
@@ -50,6 +69,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       cancelled = true;
+      if (detachProfileSnapshot) detachProfileSnapshot();
       unsubscribe();
     };
   }, []);

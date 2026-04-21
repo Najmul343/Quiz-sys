@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../lib/firebase';
 import { collection, query, where, getDocs, orderBy, doc, getDoc } from 'firebase/firestore';
+import { signOut } from 'firebase/auth';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   GraduationCap, 
@@ -24,6 +25,7 @@ import {
 import { Link } from 'react-router-dom';
 import { cn, getDirectImageUrl } from '../lib/utils';
 import MathRenderer from '../components/MathRenderer';
+import { useAuth } from '../context/AuthContext';
 
 import { 
   LineChart, 
@@ -38,6 +40,7 @@ import {
 } from 'recharts';
 
 export default function StudentDashboard() {
+  const { profile } = useAuth();
   const [tests, setTests] = useState<any[]>([]);
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [questions, setQuestions] = useState<Record<string, any>>({});
@@ -139,12 +142,12 @@ export default function StudentDashboard() {
         </div>
         <div className="flex items-center gap-6">
           <div className="hidden md:flex flex-col text-right">
-            <span className="text-sm font-black text-[var(--text-main)]">{auth.currentUser?.displayName}</span>
+            <span className="text-sm font-black text-[var(--text-main)]">{profile?.displayName || auth.currentUser?.displayName}</span>
             <span className="text-[10px] text-[var(--text-sub)] font-bold uppercase tracking-widest leading-none">ID: {auth.currentUser?.uid.slice(0, 8)}</span>
           </div>
           <div style={{ height: '28px', width: '1px', backgroundColor: 'var(--border)' }}></div>
           <button 
-            onClick={() => auth.signOut()}
+            onClick={() => signOut(auth)}
             className="p-2.5 rounded-xl border border-[var(--border)] text-[var(--text-sub)] hover:text-red-500 hover:border-red-100 transition-all bg-white shadow-sm"
           >
             <LogOut size={20} />

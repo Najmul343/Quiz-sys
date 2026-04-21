@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { auth, db } from '../lib/firebase';
-import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
+import { signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs, updateDoc, deleteDoc } from 'firebase/firestore';
 import { motion } from 'framer-motion';
 import { LogIn, ShieldCheck, GraduationCap, School, Loader2 } from 'lucide-react';
@@ -42,7 +42,7 @@ export default function LoginPage() {
 
       if (snap.empty) {
         // User not pre-registered - REJECT
-        await auth.signOut();
+        await signOut(auth);
         setError("Access Denied: Your email is not registered in our institutional records. Please contact your college administrator.");
       } else {
         // User exists - Link UID and ensure doc ID is UID
