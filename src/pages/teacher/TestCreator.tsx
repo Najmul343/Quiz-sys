@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
+import { fetchAccessibleQuestions } from '../../lib/questionAccess';
 import MathRenderer from '../../components/MathRenderer';
 import { useAuth } from '../../context/AuthContext';
 
@@ -98,9 +99,8 @@ export default function TestCreator({
 
       if (!collegeId) return;
 
-      const q = query(collection(db, 'questions'), where('collegeId', '==', collegeId));
-      const snap = await getDocs(q);
-      setQuestions(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const fetchedQuestions = await fetchAccessibleQuestions(db, collegeId);
+      setQuestions(fetchedQuestions);
 
       if (viewerMode === 'college') {
         const fallbackTeacherIds = teacherIdsOverride?.length

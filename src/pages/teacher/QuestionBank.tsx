@@ -1,6 +1,6 @@
-import React, { useState, useEffect, ChangeEvent, useRef } from 'react';
+import React, { useState, useEffect, ChangeEvent, useRef, useDeferredValue, useMemo } from 'react';
 import { db, auth } from '../../lib/firebase';
-import { collection, query, getDocs, addDoc, serverTimestamp, orderBy, deleteDoc, doc, setDoc, where, getDoc } from 'firebase/firestore';
+import { collection, query, getDocs, addDoc, serverTimestamp, deleteDoc, doc, setDoc, where, getDoc, writeBatch } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Plus, 
@@ -22,6 +22,7 @@ import {
   Info
 } from 'lucide-react';
 import { cn, getDirectImageUrl } from '../../lib/utils';
+import { fetchAccessibleQuestions } from '../../lib/questionAccess';
 import { generateQuestionsAI } from '../../services/geminiService';
 import * as pdfjs from 'pdfjs-dist';
 import mammoth from 'mammoth';
@@ -31,13 +32,31 @@ import MathRenderer from '../../components/MathRenderer';
 // Set up PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
-export default function QuestionBank() {
+type QuestionBankProps = {
+  collegeIdOverride?: string;
+  mode?: 'teacher' | 'principal' | 'superadmin';
+};
+
+export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: QuestionBankProps) {
   const [questions, setQuestions] = useState<any[]>([]);
+  const [availableColleges, setAvailableColleges] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
   const [showManualModal, setShowManualModal] = useState(false);
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [showSharePanel, setShowSharePanel] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<any>(null);
+  const [savingRename, setSavingRename] = useState(false);
+  const [sharingQuestionBank, setSharingQuestionBank] = useState(false);
+  const [shareNote, setShareNote] = useState('');
+  const [shareTargetCollegeId, setShareTargetCollegeId] = useState('');
+  const [shareScopeType, setShareScopeType] = useState<'subject' | 'chapter'>('subject');
+  const [renameSubjectFrom, setRenameSubjectFrom] = useState('');
+  const [renameSubjectTo, setRenameSubjectTo] = useState('');
+  const [renameChapterFrom, setRenameChapterFrom] = useState('');
+  const [renameChapterTo, setRenameChapterTo] = useState('');
+  const [renameMessage, setRenameMessage] = useState<string | null>(null);
   
   // Filtering states
   const [searchQuery, setSearchQuery] = useState("");
@@ -53,6 +72,7 @@ export default function QuestionBank() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [fileContent, setFileContent] = useState("");
   const [isReadingFile, setIsReadingFile] = useState(false);
+  const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -168,24 +188,155 @@ export default function QuestionBank() {
     }
   };
 
-  const filteredQuestions = questions.filter(q => {
-    const matchesSearch = q.text.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                         q.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         q.chapter.toLowerCase().includes(searchQuery.toLowerCase());
+  const filteredQuestions = useMemo(() => questions.filter(q => {
+    const search = deferredSearchQuery.toLowerCase();
+    const matchesSearch = (q.text || '').toLowerCase().includes(search) ||
+                         (q.subject || '').toLowerCase().includes(search) ||
+                         (q.chapter || '').toLowerCase().includes(search);
     const matchesSubject = activeSubject === 'all' || q.subject === activeSubject;
     const matchesChapter = activeChapter === 'all' || q.chapter === activeChapter;
     return matchesSearch && matchesSubject && matchesChapter;
-  });
+  }), [activeChapter, activeSubject, deferredSearchQuery, questions]);
 
-  const subjects = ['all', ...Array.from(new Set(questions.map(q => q.subject)))] as string[];
-  const chapters = ['all', ...Array.from(new Set(questions.filter(q => activeSubject === 'all' || q.subject === activeSubject).map(q => q.chapter)))] as string[];
+  const subjects = useMemo(() => ['all', ...Array.from(new Set(questions.map(q => q.subject).filter(Boolean)))], [questions]) as string[];
+  const chapters = useMemo(() => ['all', ...Array.from(new Set(questions.filter(q => activeSubject === 'all' || q.subject === activeSubject).map(q => q.chapter).filter(Boolean)))], [activeSubject, questions]) as string[];
 
-  const uniqueSubjects = Array.from(new Set(questions.map(q => q.subject))) as string[];
-  const uniqueChapters = Array.from(new Set(questions.filter(q => !aiSubject || q.subject === aiSubject).map(q => q.chapter))) as string[];
+  const uniqueSubjects = useMemo(() => Array.from(new Set(questions.map(q => q.subject).filter(Boolean))) as string[], [questions]);
+  const uniqueChapters = useMemo(() => Array.from(new Set(questions.filter(q => !aiSubject || q.subject === aiSubject).map(q => q.chapter).filter(Boolean))) as string[], [aiSubject, questions]);
 
   const handleSubjectChange = (s: string) => {
     setActiveSubject(s);
     setActiveChapter('all');
+  };
+
+  const commitBatchChunks = async (updates: Array<(batch: ReturnType<typeof writeBatch>) => void>, chunkSize = 350) => {
+    for (let i = 0; i < updates.length; i += chunkSize) {
+      const batch = writeBatch(db);
+      updates.slice(i, i + chunkSize).forEach((apply) => apply(batch));
+      await batch.commit();
+    }
+  };
+
+  const openRenameModal = () => {
+    setRenameMessage(null);
+    setRenameSubjectFrom(activeSubject !== 'all' ? activeSubject : uniqueSubjects[0] || '');
+    setRenameChapterFrom(activeChapter !== 'all' ? activeChapter : uniqueChapters[0] || '');
+    setRenameSubjectTo('');
+    setRenameChapterTo('');
+    setShowRenameModal(true);
+  };
+
+  const handleRenameTags = async () => {
+    const subjectFrom = renameSubjectFrom.trim();
+    const subjectTo = renameSubjectTo.trim();
+    const chapterFrom = renameChapterFrom.trim();
+    const chapterTo = renameChapterTo.trim();
+
+    if (!subjectFrom && !chapterFrom) {
+      setRenameMessage('Choose at least one source tag to rename.');
+      return;
+    }
+    if (!subjectTo && !chapterTo) {
+      setRenameMessage('Enter at least one new tag value.');
+      return;
+    }
+
+    const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+    const userData = userDoc.data();
+    const collegeId = collegeIdOverride || userData?.collegeId;
+    if (!collegeId) {
+      setRenameMessage('College context missing.');
+      return;
+    }
+
+    const sourceQuestions = questions.filter((question) => {
+      if (question.collegeId !== collegeId) return false;
+      const subjectMatches = !subjectFrom || question.subject === subjectFrom;
+      const chapterMatches = !chapterFrom || question.chapter === chapterFrom;
+      return subjectMatches && chapterMatches;
+    });
+
+    if (!sourceQuestions.length) {
+      setRenameMessage('No matching questions found for that tag.');
+      return;
+    }
+
+    setSavingRename(true);
+    try {
+      const updates = sourceQuestions.map((question) => (batch: ReturnType<typeof writeBatch>) => {
+        batch.update(doc(db, 'questions', question.id), {
+          ...(subjectTo ? { subject: subjectTo } : null),
+          ...(chapterTo ? { chapter: chapterTo } : null),
+          updatedAt: serverTimestamp(),
+        });
+      });
+
+      await commitBatchChunks(updates);
+      await fetchQuestions();
+      setShowRenameModal(false);
+      setRenameMessage(null);
+      if (subjectFrom && subjectTo && activeSubject === subjectFrom) {
+        setActiveSubject(subjectTo);
+      }
+      if (chapterFrom && chapterTo && activeChapter === chapterFrom) {
+        setActiveChapter(chapterTo);
+      }
+    } catch (error) {
+      console.error(error);
+      setRenameMessage('Rename failed. Please check permissions and retry.');
+    } finally {
+      setSavingRename(false);
+    }
+  };
+
+  const handleShareQuestionBank = async () => {
+    const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+    const userData = userDoc.data();
+    const sourceCollegeId = collegeIdOverride || userData?.collegeId;
+
+    if (!sourceCollegeId || !shareTargetCollegeId) return;
+    if (sourceCollegeId === shareTargetCollegeId) {
+      alert('Choose another college to share with.');
+      return;
+    }
+    if (!renameSubjectFrom && shareScopeType === 'subject' && !activeSubject && !aiSubject && !uniqueSubjects[0]) {
+      alert('Pick a subject to share.');
+      return;
+    }
+
+    const subject = shareScopeType === 'subject'
+      ? (activeSubject !== 'all' ? activeSubject : renameSubjectFrom || uniqueSubjects[0] || '')
+      : (activeSubject !== 'all' ? activeSubject : renameSubjectFrom || uniqueSubjects[0] || '');
+    const chapter = shareScopeType === 'chapter'
+      ? (activeChapter !== 'all' ? activeChapter : renameChapterFrom || uniqueChapters[0] || '')
+      : '';
+
+    if (!subject || (shareScopeType === 'chapter' && !chapter)) {
+      alert('Select the subject or chapter you want to share.');
+      return;
+    }
+
+    setSharingQuestionBank(true);
+    try {
+      await addDoc(collection(db, 'question_shares'), {
+        sourceCollegeId,
+        targetCollegeId: shareTargetCollegeId,
+        scopeType: shareScopeType,
+        subject,
+        chapter: shareScopeType === 'chapter' ? chapter : '',
+        note: shareNote.trim(),
+        createdBy: auth.currentUser?.uid,
+        createdAt: serverTimestamp(),
+      });
+      setShareNote('');
+      setShowSharePanel(false);
+      alert('Question bank access shared successfully.');
+    } catch (error) {
+      console.error(error);
+      alert('Failed to share question bank access.');
+    } finally {
+      setSharingQuestionBank(false);
+    }
   };
 
   // Manual Form State
@@ -214,22 +365,30 @@ export default function QuestionBank() {
     fetchQuestions();
   }, []);
 
+  useEffect(() => {
+    if (mode !== 'superadmin') return;
+    const loadColleges = async () => {
+      try {
+        const snap = await getDocs(query(collection(db, 'colleges')));
+        setAvailableColleges(snap.docs.map((collegeDoc) => ({ id: collegeDoc.id, ...collegeDoc.data() })));
+      } catch (error) {
+        console.error(error);
+      }
+    };
+    loadColleges();
+  }, [mode]);
+
   const fetchQuestions = async () => {
     setLoading(true);
     try {
       const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
       const userData = userDoc.data();
-      const collegeId = userData?.collegeId;
+      const collegeId = collegeIdOverride || userData?.collegeId;
 
       if (!collegeId) return;
-
-      const q = query(
-        collection(db, 'questions'), 
-        where('collegeId', '==', collegeId),
-        orderBy('createdAt', 'desc')
-      );
-      const snap = await getDocs(q);
-      setQuestions(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const fetchedQuestions = await fetchAccessibleQuestions(db, collegeId);
+      fetchedQuestions.sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      setQuestions(fetchedQuestions);
     } catch (e) {
       console.error(e);
     } finally {
@@ -424,7 +583,7 @@ export default function QuestionBank() {
           <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter italic">Question Architecture</h3>
           <p className="text-sm text-slate-500 font-bold uppercase tracking-widest text-[10px] mt-1">Hierarchical Subject-Chapter Repository</p>
         </div>
-        <div className="flex gap-4">
+        <div className="flex flex-wrap gap-3">
           <label className="flex items-center gap-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-black px-6 py-4 rounded-2xl border border-emerald-200 transition-all shadow-sm cursor-pointer group">
             <FileUp size={20} className="group-hover:translate-y-[-2px] transition-transform" />
             <span className="text-xs uppercase tracking-widest leading-none">Bulk Import (A-U)</span>
@@ -444,6 +603,30 @@ export default function QuestionBank() {
             <Plus size={20} />
             <span className="text-xs uppercase tracking-widest leading-none">Add Manually</span>
           </button>
+          <button
+            type="button"
+            onClick={openRenameModal}
+            className="flex items-center gap-2 bg-white text-slate-600 hover:text-indigo-600 hover:border-indigo-200 font-black px-6 py-4 rounded-2xl border border-slate-100 transition-all shadow-sm"
+          >
+            <Edit3 size={20} />
+            <span className="text-xs uppercase tracking-widest leading-none">Rename Tags</span>
+          </button>
+          {mode === 'superadmin' && (
+            <button
+              type="button"
+              onClick={() => {
+                setRenameSubjectFrom(activeSubject !== 'all' ? activeSubject : uniqueSubjects[0] || '');
+                setRenameChapterFrom(activeChapter !== 'all' ? activeChapter : uniqueChapters[0] || '');
+                setShareTargetCollegeId('');
+                setShareNote('');
+                setShowSharePanel(true);
+              }}
+              className="flex items-center gap-2 bg-purple-50 text-purple-700 hover:bg-purple-100 font-black px-6 py-4 rounded-2xl border border-purple-100 transition-all shadow-sm"
+            >
+              <ShieldCheck size={20} />
+              <span className="text-xs uppercase tracking-widest leading-none">Share Bank</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -510,9 +693,9 @@ export default function QuestionBank() {
             <motion.div 
               key={q.id} 
               layout
-              className="bg-white p-6 rounded-[2rem] border border-slate-100 hover:border-blue-400 transition-all shadow-lg shadow-slate-200/30 group flex flex-col"
+              className="bg-white p-4 sm:p-6 rounded-[1.5rem] sm:rounded-[2rem] border border-slate-100 hover:border-blue-400 transition-all shadow-lg shadow-slate-200/30 group flex flex-col"
             >
-              <div className="flex justify-between items-start mb-4">
+              <div className="flex justify-between items-start gap-3 mb-4">
                 <div className="flex flex-wrap gap-2">
                   <div className="px-2 py-0.5 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-md text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5">
                     <BookOpen size={10} /> {q.subject}
@@ -520,6 +703,11 @@ export default function QuestionBank() {
                   <div className="px-2 py-0.5 bg-slate-50 text-slate-500 border border-slate-100 rounded-md text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5">
                     <LayoutDashboard size={10} /> {q.chapter}
                   </div>
+                  {q.sharedFromCollegeId && (
+                    <div className="px-2 py-0.5 bg-purple-50 text-purple-600 border border-purple-100 rounded-md text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5">
+                      <ShieldCheck size={10} /> Shared
+                    </div>
+                  )}
                   <div className={cn(
                     "px-2 py-0.5 rounded-md border text-[10px] font-black uppercase tracking-widest",
                     q.difficulty === 'hard' ? 'bg-red-50 text-red-600 border-red-100' : 
@@ -550,7 +738,7 @@ export default function QuestionBank() {
               </div>
 
               {q.imageUrl && (
-                <div className="w-full h-32 bg-slate-50 rounded-2xl mb-4 overflow-hidden border border-slate-100">
+                <div className="w-full h-28 sm:h-32 bg-slate-50 rounded-2xl mb-4 overflow-hidden border border-slate-100">
                    <img src={getDirectImageUrl(q.imageUrl)} alt="Diagram" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
                 </div>
               )}
@@ -821,6 +1009,214 @@ export default function QuestionBank() {
                 >
                   {savingManual ? <Loader2 size={18} className="animate-spin" /> : <ShieldCheck size={20} />}
                   {editingQuestion ? 'UPDATE KNOWLEDGE' : 'PERSIST TO BANK'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+        {showRenameModal && (
+          <div className="fixed inset-0 z-[52] flex items-center justify-center p-4 bg-slate-900/45 backdrop-blur-md">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 18 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 18 }}
+              className="w-full max-w-2xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 sm:p-8 border-b border-slate-100">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Bulk Tag Tools</p>
+                    <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter italic">Rename subject / chapter tags</h3>
+                  </div>
+                  <button onClick={() => setShowRenameModal(false)} className="p-2 text-slate-400 hover:text-slate-900">
+                    <X size={20} />
+                  </button>
+                </div>
+                <p className="mt-2 text-sm text-slate-500 font-medium">
+                  This updates every matching question in the selected college so reports, tests, and filters stay consistent.
+                </p>
+              </div>
+
+              <div className="p-6 sm:p-8 grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div className="space-y-3">
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Subject From</label>
+                  <select
+                    value={renameSubjectFrom}
+                    onChange={(e) => setRenameSubjectFrom(e.target.value)}
+                    className="w-full px-4 py-4 rounded-2xl border border-slate-200 bg-slate-50 font-bold text-slate-700 outline-none"
+                  >
+                    <option value="">Select subject</option>
+                    {uniqueSubjects.map((subject) => (
+                      <option key={subject} value={subject}>{subject}</option>
+                    ))}
+                  </select>
+                  <input
+                    value={renameSubjectTo}
+                    onChange={(e) => setRenameSubjectTo(e.target.value)}
+                    placeholder="New subject name"
+                    className="w-full px-4 py-4 rounded-2xl border border-slate-200 bg-white font-bold text-slate-700 outline-none"
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Chapter From</label>
+                  <select
+                    value={renameChapterFrom}
+                    onChange={(e) => setRenameChapterFrom(e.target.value)}
+                    className="w-full px-4 py-4 rounded-2xl border border-slate-200 bg-slate-50 font-bold text-slate-700 outline-none"
+                  >
+                    <option value="">Select chapter</option>
+                    {uniqueChapters.map((chapter) => (
+                      <option key={chapter} value={chapter}>{chapter}</option>
+                    ))}
+                  </select>
+                  <input
+                    value={renameChapterTo}
+                    onChange={(e) => setRenameChapterTo(e.target.value)}
+                    placeholder="New chapter name"
+                    className="w-full px-4 py-4 rounded-2xl border border-slate-200 bg-white font-bold text-slate-700 outline-none"
+                  />
+                </div>
+              </div>
+
+              {renameMessage && (
+                <div className="px-6 sm:px-8 pb-4 text-[10px] font-black uppercase tracking-widest text-rose-600">
+                  {renameMessage}
+                </div>
+              )}
+
+              <div className="p-6 sm:p-8 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowRenameModal(false)}
+                  className="px-6 py-4 rounded-2xl border border-slate-200 bg-white text-slate-500 font-black uppercase tracking-widest text-[10px]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRenameTags}
+                  disabled={savingRename}
+                  className="px-6 py-4 rounded-2xl bg-indigo-600 text-white font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2 shadow-lg shadow-indigo-100 disabled:opacity-50"
+                >
+                  {savingRename ? <Loader2 size={14} className="animate-spin" /> : <Edit3 size={14} />}
+                  Apply Rename
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+        {showSharePanel && mode === 'superadmin' && (
+          <div className="fixed inset-0 z-[53] flex items-center justify-center p-4 bg-slate-900/45 backdrop-blur-md">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 18 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 18 }}
+              className="w-full max-w-2xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 sm:p-8 border-b border-slate-100">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Super Admin Share</p>
+                    <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter italic">Assign question access to another college</h3>
+                  </div>
+                  <button onClick={() => setShowSharePanel(false)} className="p-2 text-slate-400 hover:text-slate-900">
+                    <X size={20} />
+                  </button>
+                </div>
+                <p className="mt-2 text-sm text-slate-500 font-medium">
+                  Share either a whole subject or a chapter so another principal can use the same question bank.
+                </p>
+              </div>
+
+              <div className="p-6 sm:p-8 grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div className="space-y-3 md:col-span-2">
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Target College</label>
+                  <select
+                    value={shareTargetCollegeId}
+                    onChange={(e) => setShareTargetCollegeId(e.target.value)}
+                    className="w-full px-4 py-4 rounded-2xl border border-slate-200 bg-slate-50 font-bold text-slate-700 outline-none"
+                  >
+                    <option value="">Choose destination college</option>
+                    {availableColleges
+                      .filter((college) => college.id !== (collegeIdOverride || ''))
+                      .map((college) => (
+                        <option key={college.id} value={college.id}>
+                          {college.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+
+                <div className="space-y-3">
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Share Scope</label>
+                  <select
+                    value={shareScopeType}
+                    onChange={(e) => setShareScopeType(e.target.value as 'subject' | 'chapter')}
+                    className="w-full px-4 py-4 rounded-2xl border border-slate-200 bg-slate-50 font-bold text-slate-700 outline-none"
+                  >
+                    <option value="subject">Subject Wise</option>
+                    <option value="chapter">Chapter Wise</option>
+                  </select>
+                </div>
+
+                <div className="space-y-3">
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Subject</label>
+                  <select
+                    value={renameSubjectFrom}
+                    onChange={(e) => setRenameSubjectFrom(e.target.value)}
+                    className="w-full px-4 py-4 rounded-2xl border border-slate-200 bg-slate-50 font-bold text-slate-700 outline-none"
+                  >
+                    <option value="">Choose subject</option>
+                    {uniqueSubjects.map((subject) => (
+                      <option key={subject} value={subject}>{subject}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {shareScopeType === 'chapter' && (
+                  <div className="space-y-3 md:col-span-2">
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Chapter</label>
+                    <select
+                      value={renameChapterFrom}
+                      onChange={(e) => setRenameChapterFrom(e.target.value)}
+                      className="w-full px-4 py-4 rounded-2xl border border-slate-200 bg-slate-50 font-bold text-slate-700 outline-none"
+                    >
+                      <option value="">Choose chapter</option>
+                      {uniqueChapters.map((chapter) => (
+                        <option key={chapter} value={chapter}>{chapter}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="space-y-3 md:col-span-2">
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Note</label>
+                  <input
+                    value={shareNote}
+                    onChange={(e) => setShareNote(e.target.value)}
+                    placeholder="Optional note for the principal"
+                    className="w-full px-4 py-4 rounded-2xl border border-slate-200 bg-white font-bold text-slate-700 outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="p-6 sm:p-8 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowSharePanel(false)}
+                  className="px-6 py-4 rounded-2xl border border-slate-200 bg-white text-slate-500 font-black uppercase tracking-widest text-[10px]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleShareQuestionBank}
+                  disabled={sharingQuestionBank || !shareTargetCollegeId}
+                  className="px-6 py-4 rounded-2xl bg-purple-600 text-white font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2 shadow-lg shadow-purple-100 disabled:opacity-50"
+                >
+                  {sharingQuestionBank ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+                  Share Access
                 </button>
               </div>
             </motion.div>

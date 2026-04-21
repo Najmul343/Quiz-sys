@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../../lib/firebase';
-import { collection, query, where, getDocs, serverTimestamp, setDoc, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, serverTimestamp, setDoc, doc, getDoc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   UserPlus, 
@@ -51,6 +51,53 @@ export default function StudentManagement() {
       return "Attendance permissions are blocked in Firestore for this account.";
     }
     return fallback;
+  };
+
+  const commitBatchChunks = async (updates: Array<(batch: ReturnType<typeof writeBatch>) => void>, chunkSize = 350) => {
+    for (let i = 0; i < updates.length; i += chunkSize) {
+      const batch = writeBatch(db);
+      updates.slice(i, i + chunkSize).forEach((apply) => apply(batch));
+      await batch.commit();
+    }
+  };
+
+  const syncStudentReferences = async (oldStudentId: string, nextStudent: any, oldStudentName: string) => {
+    const nextStudentName = nextStudent.officialName || nextStudent.displayName || oldStudentName;
+
+    const [attendanceSnap, submissionsSnap, progressSnap] = await Promise.all([
+      getDocs(query(collection(db, 'attendance'), where('studentId', '==', oldStudentId))),
+      getDocs(query(collection(db, 'submissions'), where('studentId', '==', oldStudentId))),
+      getDocs(query(collection(db, 'practice_progress'), where('studentId', '==', oldStudentId))),
+    ]);
+
+    const attendanceUpdates = attendanceSnap.docs.map((item) => (batch: ReturnType<typeof writeBatch>) => {
+      batch.update(doc(db, 'attendance', item.id), {
+        studentId: nextStudent.id,
+        studentName: nextStudentName,
+        studentRollNo: nextStudent.rollNo || '',
+        updatedAt: serverTimestamp(),
+      });
+    });
+
+    const submissionUpdates = submissionsSnap.docs.map((item) => (batch: ReturnType<typeof writeBatch>) => {
+      batch.update(doc(db, 'submissions', item.id), {
+        studentId: nextStudent.id,
+        studentName: nextStudentName,
+        studentRollNo: nextStudent.rollNo || '',
+        updatedAt: serverTimestamp(),
+      });
+    });
+
+    const progressUpdates = progressSnap.docs.map((item) => (batch: ReturnType<typeof writeBatch>) => {
+      batch.update(doc(db, 'practice_progress', item.id), {
+        studentId: nextStudent.id,
+        studentName: nextStudentName,
+        studentRollNo: nextStudent.rollNo || '',
+        updatedAt: serverTimestamp(),
+      });
+    });
+
+    await commitBatchChunks([...attendanceUpdates, ...submissionUpdates, ...progressUpdates]);
   };
 
   useEffect(() => {
@@ -215,6 +262,8 @@ export default function StudentManagement() {
     try {
       const collegeId = currentCollegeId || profile?.collegeId;
       if (!collegeId) throw new Error("College context missing. Please reload the session.");
+      const oldStudentId = editingStudent.id;
+      const oldStudentName = editingStudent.officialName || editingStudent.displayName || '';
       const cleanEmail = editingStudent.email.toLowerCase().trim();
       const newId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '_');
       const isMigrated = !!editingStudent.uid;
@@ -258,6 +307,15 @@ export default function StudentManagement() {
         if (editingStudent.id !== newId) {
           await deleteDoc(doc(db, 'users', editingStudent.id));
         }
+      }
+
+      if (oldStudentId !== (isMigrated ? editingStudent.id : newId) || oldStudentName !== editingStudent.officialName) {
+        await syncStudentReferences(oldStudentId, {
+          id: isMigrated ? editingStudent.id : newId,
+          officialName: editingStudent.officialName,
+          displayName: editingStudent.officialName,
+          rollNo: editingStudent.rollNo,
+        }, oldStudentName);
       }
 
       setEditingStudent(null);
@@ -380,41 +438,41 @@ export default function StudentManagement() {
       </AnimatePresence>
 
       {/* Student List */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 lg:gap-8">
         {filteredStudents.map((student) => (
           <motion.div 
             layout
             key={student.id}
-            className="bg-white group overflow-hidden rounded-[3rem] border border-slate-200 hover:border-blue-400 transition-all shadow-xl shadow-slate-200/40 relative"
+            className="bg-white group overflow-hidden rounded-[1.5rem] sm:rounded-[2.5rem] border border-slate-200 hover:border-blue-400 transition-all shadow-xl shadow-slate-200/40 relative"
           >
-            <div className="p-10 flex gap-8 items-start">
-               <div className="w-24 h-24 bg-slate-50 rounded-[2rem] border border-slate-100 flex items-center justify-center text-slate-300 group-hover:bg-blue-50 group-hover:text-blue-600 transition-all">
-                  <UserIcon size={44} />
+            <div className="p-4 sm:p-6 lg:p-10 flex flex-col sm:flex-row gap-4 sm:gap-6 lg:gap-8 items-start">
+               <div className="w-16 h-16 sm:w-20 sm:h-20 lg:w-24 lg:h-24 bg-slate-50 rounded-2xl sm:rounded-[2rem] border border-slate-100 flex items-center justify-center text-slate-300 group-hover:bg-blue-50 group-hover:text-blue-600 transition-all">
+                  <UserIcon size={30} className="sm:w-9 sm:h-9 lg:w-[44px] lg:h-[44px]" />
                </div>
 
                <div className="flex-1">
-                  <div className="flex justify-between items-start">
+                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3">
                      <div>
-                        <h4 className="text-2xl font-black text-slate-800 uppercase tracking-tight">{student.officialName || student.displayName}</h4>
-                        <p className="text-xs font-black text-blue-600 uppercase tracking-[0.2em] mb-4">{student.trade || 'General Course'}</p>
+                        <h4 className="text-lg sm:text-xl lg:text-2xl font-black text-slate-800 uppercase tracking-tight break-words">{student.officialName || student.displayName}</h4>
+                        <p className="text-[10px] sm:text-xs font-black text-blue-600 uppercase tracking-[0.2em] mb-3 sm:mb-4">{student.trade || 'General Course'}</p>
                      </div>
-                     <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                     <div className="flex gap-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                         <button 
                           onClick={() => setEditingStudent(student)}
-                          className="p-3 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-2xl transition-all"
+                          className="p-2.5 sm:p-3 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl sm:rounded-2xl transition-all"
                         >
-                          <Edit2 size={20} />
+                          <Edit2 size={18} className="sm:w-5 sm:h-5" />
                         </button>
                         <button 
                           onClick={() => setConfirmDelete(student.id)}
-                          className="p-3 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-2xl transition-all"
+                          className="p-2.5 sm:p-3 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl sm:rounded-2xl transition-all"
                         >
-                           <Trash2 size={20} />
+                           <Trash2 size={18} className="sm:w-5 sm:h-5" />
                         </button>
                      </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-2 mb-4">
+                  <div className="flex flex-wrap gap-2 mb-3 sm:mb-4">
                       {student.uid ? (
                         <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-600 rounded-lg text-[9px] font-black uppercase tracking-widest border border-emerald-100">
                           <UserCheck size={12} />
@@ -433,18 +491,18 @@ export default function StudentManagement() {
                       )}
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                     <div className="flex items-center gap-2 p-3 bg-slate-50 rounded-2xl border border-slate-100/50">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-4">
+                     <div className="flex items-center gap-2 p-2.5 sm:p-3 bg-slate-50 rounded-2xl border border-slate-100/50">
                         <Fingerprint size={16} className="text-slate-400" />
                         <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">{student.rollNo || 'No Roll'}</span>
                      </div>
-                     <div className="flex items-center gap-2 p-3 bg-slate-50 rounded-2xl border border-slate-100/50">
+                     <div className="flex items-center gap-2 p-2.5 sm:p-3 bg-slate-50 rounded-2xl border border-slate-100/50">
                         <Mail size={16} className="text-slate-400" />
                         <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest truncate">{student.email}</span>
                      </div>
                   </div>
 
-                  <div className="mt-5 pt-5 border-t border-slate-100">
+                  <div className="mt-4 sm:mt-5 pt-4 sm:pt-5 border-t border-slate-100">
                     <div className="flex items-center justify-between gap-3 mb-3">
                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Attendance for {attendanceDate}</p>
                       <span className={cn(
@@ -458,7 +516,7 @@ export default function StudentManagement() {
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       {[
                         { key: 'present' as const, label: 'Present', icon: UserCheck, tone: 'emerald' },
                         { key: 'late' as const, label: 'Late', icon: Clock3, tone: 'amber' },

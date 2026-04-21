@@ -372,7 +372,14 @@ export default function QuizSession() {
       <header className="h-14 sm:h-16 bg-white border-b border-slate-200 px-4 sm:px-8 flex items-center justify-between z-50 shrink-0">
         <div className="flex items-center gap-2 sm:gap-4 truncate">
           <div className="w-8 h-8 sm:w-10 sm:h-10 bg-indigo-600 text-white rounded-lg flex items-center justify-center font-black text-sm sm:text-base">M</div>
-          <h2 className="font-extrabold text-slate-800 text-sm sm:text-lg truncate uppercase tracking-tight">{test?.title}</h2>
+          <div className="min-w-0 flex items-center gap-2 sm:gap-3">
+            <h2 className="font-extrabold text-slate-800 text-sm sm:text-lg truncate uppercase tracking-tight">{test?.title}</h2>
+            {test?.isPractice && (
+              <span className="hidden sm:inline-flex px-2 py-1 rounded-full bg-amber-100 text-amber-700 border border-amber-200 text-[9px] font-black uppercase tracking-widest">
+                Practice
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-2 sm:gap-6">

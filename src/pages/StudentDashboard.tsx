@@ -193,7 +193,7 @@ export default function StudentDashboard() {
               <motion.div
                 key={test.id}
                 whileHover={{ y: -4, scale: 1.01 }}
-                className="bento-card group flex flex-col min-h-[320px] bg-white p-8 relative overflow-hidden transition-all duration-300"
+                className="bento-card group flex flex-col min-h-[260px] sm:min-h-[320px] bg-white p-5 sm:p-8 relative overflow-hidden transition-all duration-300"
               >
                 <div className="absolute -top-12 -right-12 w-32 h-32 bg-indigo-50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity blur-3xl" />
                 
@@ -202,9 +202,15 @@ export default function StudentDashboard() {
                     {test.settings?.forceFullscreen ? <ShieldCheck size={28} /> : <GraduationCap size={28} />}
                   </div>
                   {test.settings?.forceFullscreen && (
-                    <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-600 rounded-full border border-red-100">
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-600 rounded-full border border-red-100">
                       <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-ping" />
                       <span className="text-[10px] font-black uppercase tracking-widest">Strict Mode</span>
+                    </div>
+                  )}
+                  {test.isPractice && (
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 text-amber-700 rounded-full border border-amber-100">
+                      <div className="w-1.5 h-1.5 bg-amber-500 rounded-full" />
+                      <span className="text-[10px] font-black uppercase tracking-widest">Practice Test</span>
                     </div>
                   )}
                 </div>

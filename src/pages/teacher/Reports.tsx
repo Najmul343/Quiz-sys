@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { db, auth } from '../../lib/firebase';
 import { collection, query, where, getDocs, orderBy, doc, getDoc, updateDoc, writeBatch } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -53,6 +53,7 @@ export default function TeacherReports() {
   const [selectedSubs, setSelectedSubs] = useState<string[]>([]);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [studentSearch, setStudentSearch] = useState('');
+  const [studentDirectory, setStudentDirectory] = useState<Record<string, any>>({});
 
   useEffect(() => {
     fetchData();
@@ -67,13 +68,14 @@ export default function TeacherReports() {
       if (!collegeId) return;
 
       // Parallelize queries
-      const [testSnap, subSnap] = await Promise.all([
+      const [testSnap, subSnap, studentSnap] = await Promise.all([
         getDocs(query(collection(db, 'tests'), where('teacherId', '==', auth.currentUser?.uid), where('collegeId', '==', collegeId))),
         getDocs(query(
           collection(db, 'submissions'), 
           where('collegeId', '==', collegeId),
           orderBy('submittedAt', 'desc')
-        ))
+        )),
+        getDocs(query(collection(db, 'users'), where('role', '==', 'student'), where('collegeId', '==', collegeId)))
       ]);
 
       const testList = testSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -82,6 +84,12 @@ export default function TeacherReports() {
       const allSubs = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       const teacherSubs = allSubs.filter((s: any) => testList.some((t: any) => t.id === s.testId));
       setSubmissions(teacherSubs);
+
+      const studentMap: Record<string, any> = {};
+      studentSnap.docs.forEach((studentDoc) => {
+        studentMap[studentDoc.id] = { id: studentDoc.id, ...studentDoc.data() };
+      });
+      setStudentDirectory(studentMap);
       
       // Questions are now fetched on-demand in handleViewSubmission
     } catch (e) {
@@ -129,15 +137,20 @@ export default function TeacherReports() {
     }
   };
 
-  const filteredSubs = (selectedTestId === 'all' 
+  const getStudentDisplayName = (studentId: string, fallback?: string) => {
+    const student = studentDirectory[studentId];
+    return student?.officialName || student?.displayName || fallback || 'Student';
+  };
+
+  const filteredSubs = useMemo(() => (selectedTestId === 'all'
     ? (selectedStudentId ? submissions.filter(s => s.studentId === selectedStudentId) : submissions)
     : submissions.filter(s => s.testId === selectedTestId))
-    .sort((a, b) => (a.studentRollNo || '').localeCompare(b.studentRollNo || '', undefined, { numeric: true }));
+    .sort((a, b) => (a.studentRollNo || '').localeCompare(b.studentRollNo || '', undefined, { numeric: true })), [selectedStudentId, selectedTestId, submissions]);
 
-  const studentList = Array.from(new Set(submissions.map(s => JSON.stringify({id: s.studentId, name: s.studentName, roll: s.studentRollNo}))))
+  const studentList = useMemo(() => Array.from(new Set(submissions.map(s => JSON.stringify({id: s.studentId, name: getStudentDisplayName(s.studentId, s.studentName), roll: s.studentRollNo}))))
     .map(s => JSON.parse(s as string))
     .filter(s => s.name.toLowerCase().includes(studentSearch.toLowerCase()) || s.roll?.toLowerCase().includes(studentSearch.toLowerCase()))
-    .sort((a, b) => (a.roll || '').localeCompare(b.roll || '', undefined, { numeric: true }));
+    .sort((a, b) => (a.roll || '').localeCompare(b.roll || '', undefined, { numeric: true })), [studentSearch, submissions, studentDirectory]);
 
   const getGrowthData = (studentId: string) => {
     return submissions
@@ -158,11 +171,11 @@ export default function TeacherReports() {
     };
   };
 
-  const stats = {
+  const stats = useMemo(() => ({
     avgScore: filteredSubs.length ? (filteredSubs.reduce((acc, s) => acc + (s.percentage || (s.score/s.total*100)), 0) / filteredSubs.length).toFixed(1) : 0,
     totalStudents: new Set(filteredSubs.map(s => s.studentId)).size,
     passRate: filteredSubs.length ? ((filteredSubs.filter(s => s.status === 'PASS').length / filteredSubs.length) * 100).toFixed(1) : 0
-  };
+  }), [filteredSubs]);
 
   if (loading) return <div className="h-64 flex items-center justify-center"><Loader2 className="animate-spin text-indigo-600" /></div>;
 
@@ -237,7 +250,7 @@ export default function TeacherReports() {
 
       {/* Growth Tracking & Selection */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-        <div className="lg:col-span-1 bg-white p-8 rounded-[3rem] border border-slate-100 shadow-xl shadow-slate-200/40 space-y-6">
+        <div className="lg:col-span-1 bg-white p-5 sm:p-8 rounded-[2rem] sm:rounded-[3rem] border border-slate-100 shadow-xl shadow-slate-200/40 space-y-4 sm:space-y-6">
            <div>
               <h3 className="text-xl font-black uppercase tracking-tight text-slate-800">Growth Monitor</h3>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Select student to analyze delta</p>
@@ -252,11 +265,11 @@ export default function TeacherReports() {
                 className="w-full pl-10 pr-4 py-3 bg-slate-50 rounded-xl text-[10px] font-black uppercase outline-none focus:bg-white focus:ring-2 focus:ring-indigo-600 transition-all"
               />
            </div>
-           <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+           <div className="space-y-2 max-h-[320px] sm:max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
               <button 
                 onClick={() => setSelectedStudentId(null)}
                 className={cn(
-                  "w-full p-4 rounded-2xl text-left border transition-all",
+                  "w-full p-3 sm:p-4 rounded-2xl text-left border transition-all",
                   selectedStudentId === null ? "bg-indigo-600 border-indigo-600 text-white shadow-lg" : "bg-slate-50 border-transparent text-slate-500 hover:bg-slate-100"
                 )}
               >
@@ -267,11 +280,11 @@ export default function TeacherReports() {
                   key={s.id}
                   onClick={() => setSelectedStudentId(s.id)}
                   className={cn(
-                    "w-full p-4 rounded-2xl text-left border transition-all",
+                    "w-full p-3 sm:p-4 rounded-2xl text-left border transition-all",
                     selectedStudentId === s.id ? "bg-indigo-600 border-indigo-600 text-white shadow-lg" : "bg-white border-slate-100 text-slate-600 hover:border-indigo-600 shadow-sm"
                   )}
                 >
-                  <p className="font-black text-[11px] uppercase tracking-tight">{s.name}</p>
+                  <p className="font-black text-[10px] sm:text-[11px] uppercase tracking-tight leading-snug">{s.name}</p>
                   <p className={cn("text-[9px] font-bold mt-1", selectedStudentId === s.id ? "text-indigo-200" : "text-slate-400")}>Roll: {s.roll || 'N/A'}</p>
                 </button>
               ))}
