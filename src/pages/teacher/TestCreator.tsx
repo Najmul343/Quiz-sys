@@ -58,6 +58,7 @@ export default function TestCreator({
   // Filtering
   const [subjectFilter, setSubjectFilter] = useState("all");
   const [chapterFilter, setChapterFilter] = useState("all");
+  const [showChapterLabels, setShowChapterLabels] = useState(true);
 
   const sanitizeLegacyDocId = (value?: string | null) => (value || '').toLowerCase().trim().replace(/[^a-zA-Z0-9]/g, '_');
   const dedupeById = <T extends { id: string }>(items: T[]) => Array.from(new Map(items.map((item) => [item.id, item])).values());
@@ -304,6 +305,18 @@ export default function TestCreator({
                   />
                 </label>
               ))}
+              <label className="flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all border-2 bg-slate-50 border-transparent">
+                <div className="flex items-center gap-3">
+                  <CheckCircle2 size={20} className={showChapterLabels ? "text-indigo-600" : "text-slate-400"} />
+                  <span className="text-xs font-black uppercase tracking-tight text-slate-700">Show Chapter Label in Pallet</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={showChapterLabels}
+                  onChange={(e) => setShowChapterLabels(e.target.checked)}
+                  className="w-5 h-5 rounded accent-slate-900"
+                />
+              </label>
             </div>
           </div>
 
@@ -483,7 +496,9 @@ export default function TestCreator({
                        <span className="text-[10px] font-black uppercase tracking-widest text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded leading-none">{q.subject}</span>
                     </div>
                     <MathRenderer content={q.text} className="font-bold text-slate-800 leading-relaxed text-sm line-clamp-3" />
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-4 italic">{q.chapter}</p>
+                    {showChapterLabels && (
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-4 italic">{q.chapter}</p>
+                    )}
                   </div>
                 </div>
               </div>

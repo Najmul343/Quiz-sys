@@ -1,9 +1,13 @@
 import { GoogleGenAI } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY || import.meta.env.GEMINI_API_KEY || "";
+const ai = new GoogleGenAI({ apiKey });
 
 export async function generateQuestionsAI(subject: string, topic: string, difficulty: string, count: number, contextText?: string) {
   try {
+    if (!apiKey) {
+      throw new Error("Missing Gemini API key. Set VITE_GEMINI_API_KEY in your Vite environment.");
+    }
     const prompt = `Generate ${count} MCQ questions based on the following context.
     Subject: ${subject}
     Topic: ${topic}

@@ -43,6 +43,7 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
   const [loading, setLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
+  const [showBulkImportModal, setShowBulkImportModal] = useState(false);
   const [showManualModal, setShowManualModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [showSharePanel, setShowSharePanel] = useState(false);
@@ -69,6 +70,10 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
   const [aiDiff, setAiDiff] = useState("medium");
   const [aiSubject, setAiSubject] = useState("");
   const [aiChapter, setAiChapter] = useState("");
+  const [bulkSubject, setBulkSubject] = useState("");
+  const [bulkChapter, setBulkChapter] = useState("");
+  const [bulkContext, setBulkContext] = useState("");
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [fileContent, setFileContent] = useState("");
   const [isReadingFile, setIsReadingFile] = useState(false);
@@ -458,8 +463,7 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
     }
   };
 
-  const handleExcelImport = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleExcelImport = async (file: File, subjectName: string, chapterName: string, contextText = "") => {
     if (!file) return;
 
     setLoading(true);
@@ -508,8 +512,9 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
             D: String(row[19] || "")
           },
           explanationImageUrl: String(row[20] || ""),
-          subject: activeSubject === 'all' ? 'Uncategorized' : activeSubject,
-          chapter: activeChapter === 'all' ? 'Bulk Upload' : activeChapter,
+          subject: subjectName || (activeSubject === 'all' ? 'Uncategorized' : activeSubject),
+          chapter: chapterName || (activeChapter === 'all' ? 'Bulk Upload' : activeChapter),
+          contextualData: contextText,
           collegeId,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -524,12 +529,16 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
 
       alert(`Successfully imported ${questionsToUpload.length} questions.`);
       fetchQuestions();
+      setShowBulkImportModal(false);
+      setBulkFile(null);
+      setBulkSubject('');
+      setBulkChapter('');
+      setBulkContext('');
     } catch (error) {
       console.error("Excel Import Error:", error);
       alert("Failed to import Excel. Ensure it follows the A-U column format.");
     } finally {
       setLoading(false);
-      if (e.target) e.target.value = "";
     }
   };
 
@@ -584,11 +593,20 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
           <p className="text-sm text-slate-500 font-bold uppercase tracking-widest text-[10px] mt-1">Hierarchical Subject-Chapter Repository</p>
         </div>
         <div className="flex flex-wrap gap-3">
-          <label className="flex items-center gap-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-black px-6 py-4 rounded-2xl border border-emerald-200 transition-all shadow-sm cursor-pointer group">
+          <button
+            type="button"
+            onClick={() => {
+              setBulkSubject(activeSubject !== 'all' ? activeSubject : uniqueSubjects[0] || '');
+              setBulkChapter(activeChapter !== 'all' ? activeChapter : uniqueChapters[0] || '');
+              setBulkContext('');
+              setBulkFile(null);
+              setShowBulkImportModal(true);
+            }}
+            className="flex items-center gap-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-black px-6 py-4 rounded-2xl border border-emerald-200 transition-all shadow-sm group"
+          >
             <FileUp size={20} className="group-hover:translate-y-[-2px] transition-transform" />
             <span className="text-xs uppercase tracking-widest leading-none">Bulk Import (A-U)</span>
-            <input type="file" className="hidden" accept=".xlsx,.xls" onChange={handleExcelImport} />
-          </label>
+          </button>
           <button 
             onClick={() => setShowAiModal(true)}
             className="flex items-center gap-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-black px-6 py-4 rounded-2xl border border-indigo-200 transition-all shadow-sm group"
@@ -1232,6 +1250,151 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
         accept="image/*" 
         className="hidden" 
       />
+
+      {/* Bulk Import Modal */}
+      <AnimatePresence>
+        {showBulkImportModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/45 backdrop-blur-sm">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-8 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-emerald-50 to-white">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-emerald-600 rounded-2xl flex items-center justify-center text-white">
+                    <FileUp size={24} />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-800 tracking-tight uppercase tracking-tighter italic">Bulk Import Setup</h3>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Tag subject, chapter and source before upload</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowBulkImportModal(false)} className="p-2 text-slate-300 hover:text-slate-900 transition-colors">
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="p-8 space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Subject Area</label>
+                    <div className="space-y-2">
+                      <select
+                        value={bulkSubject}
+                        onChange={(e) => setBulkSubject(e.target.value)}
+                        className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-600 outline-none transition-all font-bold text-slate-700 text-xs"
+                      >
+                        <option value="">Existing...</option>
+                        {uniqueSubjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                      </select>
+                      <input
+                        type="text"
+                        value={bulkSubject}
+                        onChange={(e) => setBulkSubject(e.target.value)}
+                        placeholder="Or type new..."
+                        className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-600 outline-none transition-all text-[10px] font-black uppercase text-slate-600"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Chapter / Topic</label>
+                    <div className="space-y-2">
+                      <select
+                        value={bulkChapter}
+                        onChange={(e) => setBulkChapter(e.target.value)}
+                        className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-600 outline-none transition-all font-bold text-slate-700 text-xs"
+                      >
+                        <option value="">Existing...</option>
+                        {uniqueChapters.map((chapter) => <option key={chapter} value={chapter}>{chapter}</option>)}
+                      </select>
+                      <input
+                        type="text"
+                        value={bulkChapter}
+                        onChange={(e) => setBulkChapter(e.target.value)}
+                        placeholder="Or type new..."
+                        className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-600 outline-none transition-all text-[10px] font-black uppercase text-slate-600"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-slate-700 uppercase tracking-widest mb-2">Contextual Data</label>
+                  <textarea
+                    value={bulkContext}
+                    onChange={(e) => setBulkContext(e.target.value)}
+                    placeholder="Enter concept or paste source text..."
+                    className="w-full p-4 h-24 bg-slate-50 border border-slate-100 rounded-xl focus:border-emerald-600 outline-none transition-all font-medium resize-none text-xs"
+                  />
+                </div>
+
+                <div className="bg-slate-50 p-6 rounded-2xl border-2 border-dashed border-slate-200">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <FileUp size={24} className="text-emerald-600" />
+                      <div>
+                        <p className="text-xs font-black uppercase text-slate-700">Source Document</p>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase">PDF, DOCX, XLSX</p>
+                      </div>
+                    </div>
+                    {bulkFile && (
+                      <button
+                        onClick={() => setBulkFile(null)}
+                        className="p-2 hover:bg-red-50 text-red-500 rounded-lg"
+                      >
+                        <X size={16} />
+                      </button>
+                    )}
+                  </div>
+
+                  {bulkFile ? (
+                    <div className="bg-white p-3 rounded-xl border border-emerald-100 flex items-center justify-between">
+                      <span className="text-[10px] font-black uppercase text-emerald-600 truncate max-w-[200px]">{bulkFile.name}</span>
+                      <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                    </div>
+                  ) : (
+                    <label className="cursor-pointer">
+                      <input
+                        type="file"
+                        className="hidden"
+                        accept=".xlsx,.xls"
+                        onChange={(e) => setBulkFile(e.target.files?.[0] || null)}
+                      />
+                      <div className="py-4 text-center border-2 border-slate-200 border-dashed rounded-xl hover:bg-white hover:border-emerald-600 transition-all">
+                        <span className="text-[10px] font-black uppercase text-slate-400">Click to Upload Materials</span>
+                      </div>
+                    </label>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-8 bg-slate-50 border-t border-slate-100 flex gap-4">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setShowBulkImportModal(false)}
+                  className="px-6 py-4 bg-white border border-slate-200 text-slate-400 font-bold rounded-2xl flex-1 hover:text-slate-600 transition-all uppercase text-[10px] tracking-widest"
+                >
+                  Cancel
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => bulkFile && handleExcelImport(bulkFile, bulkSubject, bulkChapter, bulkContext)}
+                  disabled={!bulkFile}
+                  className="px-6 py-4 bg-emerald-600 text-white font-black rounded-2xl flex-1 flex items-center justify-center gap-3 hover:bg-slate-900 shadow-xl shadow-emerald-100 transition-all disabled:opacity-50 uppercase text-[10px] tracking-widest"
+                >
+                  <ShieldCheck size={18} />
+                  Import Questions
+                </motion.button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* AI Generate Modal */}
       <AnimatePresence>
