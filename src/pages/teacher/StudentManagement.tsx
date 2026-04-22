@@ -121,7 +121,7 @@ export default function StudentManagement({ classIdOverride }: StudentManagement
       setCurrentCollegeId(profile.collegeId);
       fetchStudents(profile.collegeId);
     }
-  }, [profile]);
+  }, [profile, classIdOverride]);
 
   useEffect(() => {
     if (currentCollegeId && students.length) {

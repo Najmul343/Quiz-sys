@@ -75,7 +75,7 @@ export default function TestCreator({
       }
     };
     init();
-  }, [editId, profile, collegeIdOverride, viewerMode]);
+  }, [editId, profile, collegeIdOverride, viewerMode, classIdOverride]);
 
   const loadExistingTest = async (id: string) => {
     try {

@@ -29,7 +29,7 @@ export default function TeacherOverview({ classIdOverride }: TeacherOverviewProp
     if (profile?.collegeId) {
       fetchStats(profile.collegeId);
     }
-  }, [profile]);
+  }, [profile, classIdOverride]);
 
   const fetchStats = async (collegeIdArg?: string) => {
     try {

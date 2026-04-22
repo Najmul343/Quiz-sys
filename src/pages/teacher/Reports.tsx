@@ -73,7 +73,7 @@ export default function TeacherReports({
 
   useEffect(() => {
     fetchData();
-  }, [collegeIdOverride, scopeMode, teacherIdsOverride]);
+  }, [collegeIdOverride, scopeMode, teacherIdsOverride, classIdOverride]);
 
   const fetchData = async () => {
     try {

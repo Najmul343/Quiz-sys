@@ -406,6 +406,21 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher', clas
   }, [teacherClassId]);
 
   useEffect(() => {
+    const refreshOnFocus = () => {
+      if (mode === 'teacher' && document.visibilityState !== 'hidden') {
+        fetchQuestions();
+      }
+    };
+
+    window.addEventListener('focus', refreshOnFocus);
+    document.addEventListener('visibilitychange', refreshOnFocus);
+    return () => {
+      window.removeEventListener('focus', refreshOnFocus);
+      document.removeEventListener('visibilitychange', refreshOnFocus);
+    };
+  }, [mode, teacherClassId, classIdOverride]);
+
+  useEffect(() => {
     setAvailableClasses(classOptions);
   }, [classOptions]);
 
