@@ -122,6 +122,17 @@ export default function PrincipalDashboard() {
     return fallback;
   };
 
+  const getUserWriteErrorMessage = (error: unknown, fallback: string) => {
+    const message = error instanceof Error ? error.message.toLowerCase() : '';
+    if (message.includes('missing or insufficient permissions')) {
+      return "This account cannot update faculty records in Firestore right now.";
+    }
+    if (message.includes('already registered')) {
+      return error instanceof Error ? error.message : fallback;
+    }
+    return fallback;
+  };
+
   useEffect(() => {
     if (status) {
       const timer = setTimeout(() => setStatus(null), 5000);
@@ -409,7 +420,10 @@ export default function PrincipalDashboard() {
   };
 
   const handleSaveTeacher = async () => {
-    if (!newTeacher.name || !newTeacher.email || !collegeData) return;
+    if (!newTeacher.name || !newTeacher.email || !collegeData) {
+      setStatus({ type: 'error', message: "Teacher name and email are required before saving." });
+      return;
+    }
     setSaving(true);
     setStatus(null);
     try {
@@ -418,13 +432,6 @@ export default function PrincipalDashboard() {
        const targetTeacherDocId = editingTeacher?.id || teacherId;
        
        if (editingTeacher) {
-         // Check collision if email changed
-         if (cleanEmail !== editingTeacher.email) {
-            const exQ = query(collection(db, 'users'), where('email', '==', cleanEmail));
-            const exSnap = await getDocs(exQ);
-            if (!exSnap.empty) throw new Error("Email already registered in the faculty network.");
-         }
-
          const nextTeacherPayload = {
            displayName: newTeacher.name,
            officialName: newTeacher.name,
@@ -449,11 +456,6 @@ export default function PrincipalDashboard() {
 
          setStatus({ type: 'success', message: "Faculty profile updated successfully." });
        } else {
-         // Check collision
-         const exQ = query(collection(db, 'users'), where('email', '==', cleanEmail));
-         const exSnap = await getDocs(exQ);
-         if (!exSnap.empty) throw new Error("Email already registered in the faculty network.");
-
          await setDoc(doc(db, 'users', teacherId), {
            displayName: newTeacher.name,
            officialName: newTeacher.name,
@@ -471,7 +473,7 @@ export default function PrincipalDashboard() {
        fetchDashboardData();
     } catch (e: any) {
        console.error(e);
-       setStatus({ type: 'error', message: e.message || "Credentialing failed. Integrity check rejected." });
+       setStatus({ type: 'error', message: getUserWriteErrorMessage(e, "Teacher registration failed. Please try again.") });
     } finally {
        setSaving(false);
     }
@@ -517,7 +519,10 @@ export default function PrincipalDashboard() {
   };
 
   const handleSaveClass = async () => {
-    if (!newClass.name || !newClass.teacherId || !collegeData) return;
+    if (!newClass.name || !newClass.teacherId || !collegeData) {
+      setStatus({ type: 'error', message: "Class name and assigned teacher are required." });
+      return;
+    }
     setSaving(true);
     try {
        if (editingClass) {
@@ -538,9 +543,11 @@ export default function PrincipalDashboard() {
        setShowClassModal(false);
        setEditingClass(null);
        setNewClass({ name: '', teacherId: '' });
+       setStatus({ type: 'success', message: editingClass ? "Classroom reassigned successfully." : "Classroom created successfully." });
        fetchDashboardData();
     } catch (e) {
        console.error(e);
+       setStatus({ type: 'error', message: "Classroom save failed. Please try again." });
     } finally {
        setSaving(false);
     }

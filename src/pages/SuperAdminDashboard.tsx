@@ -70,6 +70,14 @@ export default function SuperAdminDashboard() {
     setActiveTab('overview');
   }, [selectedCollegeId]);
 
+  const getPrincipalWriteErrorMessage = (error: unknown, fallback: string) => {
+    const message = error instanceof Error ? error.message.toLowerCase() : '';
+    if (message.includes('missing or insufficient permissions')) {
+      return "This account cannot update principal records in Firestore right now.";
+    }
+    return fallback;
+  };
+
   const fetchColleges = async () => {
     try {
       const q = query(collection(db, 'colleges'), orderBy('createdAt', 'desc'));
@@ -163,13 +171,6 @@ export default function SuperAdminDashboard() {
       const principalId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '_');
       
       if (editingCollege) {
-        // Check collision if email changed
-        if (cleanEmail !== editingCollege.principalEmail) {
-           const exQ = query(collection(db, 'users'), where('email', '==', cleanEmail));
-           const exSnap = await getDocs(exQ);
-           if (!exSnap.empty) throw new Error("Principal email is already registered in the ecosystem.");
-        }
-
         // Fetch existing principal record to check migration
         let existingUser: any = null;
         const oldPrincipalQ = query(collection(db, 'users'), where('email', '==', editingCollege.principalEmail));
@@ -219,11 +220,6 @@ export default function SuperAdminDashboard() {
         
         setStatus({ type: 'success', message: "Institutional parameters synchronized." });
       } else {
-        // Check collision
-        const exQ = query(collection(db, 'users'), where('email', '==', cleanEmail));
-        const exSnap = await getDocs(exQ);
-        if (!exSnap.empty) throw new Error("Principal email is already registered in the ecosystem.");
-
         // Create College
         const collegeRef = await addDoc(collection(db, 'colleges'), {
           name: newCollege.name,
@@ -251,7 +247,7 @@ export default function SuperAdminDashboard() {
       fetchColleges();
     } catch (e: any) {
       console.error(e);
-      setStatus({ type: 'error', message: e.message || "Activation sequence failed." });
+      setStatus({ type: 'error', message: getPrincipalWriteErrorMessage(e, "Activation sequence failed.") });
     } finally {
       setSaving(false);
     }
