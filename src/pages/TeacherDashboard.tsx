@@ -106,6 +106,7 @@ export default function TeacherDashboard() {
               <NavLink
                 key={item.path}
                 to={item.path}
+                end={item.path === '/teacher'}
                 className={({ isActive: navIsActive }) => `flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
                   navIsActive || isActive
                     ? 'bg-[var(--primary)] text-white shadow-xl shadow-indigo-100'
@@ -165,6 +166,7 @@ export default function TeacherDashboard() {
                   <NavLink
                     key={item.path}
                     to={item.path}
+                    end={item.path === '/teacher'}
                     onClick={() => setMobileMenuOpen(false)}
                     className={({ isActive: navIsActive }) => `flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
                       navIsActive || isActive
@@ -287,7 +289,7 @@ export default function TeacherDashboard() {
         </div>
 
         <div className="p-6 lg:p-8 max-w-7xl mx-auto">
-          <Routes>
+          <Routes location={location} key={`${location.pathname}-${activeClassId || 'none'}`}>
             <Route index element={<TeacherOverview key={`overview-${activeClassId || 'none'}`} classIdOverride={activeClassId} />} />
             <Route path="questions" element={<QuestionBank key={`questions-${activeClassId || 'none'}`} classIdOverride={activeClassId} />} />
             <Route path="create-test" element={<TestCreator key={`tests-${activeClassId || 'none'}`} classIdOverride={activeClassId} />} />
