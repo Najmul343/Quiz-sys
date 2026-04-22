@@ -1,6 +1,6 @@
 import React, { useState, useEffect, ChangeEvent, useRef, useDeferredValue, useMemo } from 'react';
 import { db, auth } from '../../lib/firebase';
-import { collection, query, getDocs, addDoc, serverTimestamp, deleteDoc, doc, setDoc, where, getDoc, writeBatch } from 'firebase/firestore';
+import { collection, query, getDocs, addDoc, serverTimestamp, deleteDoc, doc, setDoc, where, getDoc, writeBatch, onSnapshot } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Plus, 
@@ -419,6 +419,46 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher', clas
       document.removeEventListener('visibilitychange', refreshOnFocus);
     };
   }, [mode, teacherClassId, classIdOverride]);
+
+  useEffect(() => {
+    if (mode !== 'teacher') return;
+
+    let closed = false;
+    let unsubscribers: Array<() => void> = [];
+
+    const attachShareListeners = async () => {
+      try {
+        const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+        const userData = userDoc.data();
+        const collegeId = collegeIdOverride || userData?.collegeId;
+        const activeClassId = classIdOverride || teacherClassId || userData?.classId || null;
+
+        if (!collegeId || closed) return;
+
+        const shareQueries = [query(collection(db, 'question_shares'), where('targetCollegeId', '==', collegeId))];
+        if (activeClassId) {
+          shareQueries.push(query(collection(db, 'question_shares'), where('targetClassId', '==', activeClassId)));
+        }
+
+        unsubscribers = shareQueries.map((shareQuery) =>
+          onSnapshot(shareQuery, () => {
+            if (!closed) {
+              fetchQuestions();
+            }
+          })
+        );
+      } catch (error) {
+        console.error(error);
+      }
+    };
+
+    attachShareListeners();
+
+    return () => {
+      closed = true;
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [mode, collegeIdOverride, classIdOverride, teacherClassId]);
 
   useEffect(() => {
     setAvailableClasses(classOptions);

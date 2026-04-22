@@ -593,31 +593,37 @@ export default function PrincipalDashboard() {
     }
     setSaving(true);
     try {
-       let savedClassId = editingClass?.id || '';
-       if (editingClass) {
-         await updateDoc(doc(db, 'classes', editingClass.id), {
-           name: newClass.name,
-           teacherId: newClass.teacherId,
-           collegeId: collegeData.id,
-           updatedAt: serverTimestamp()
-         });
-         savedClassId = editingClass.id;
-       } else {
-         const classRef = await addDoc(collection(db, 'classes'), {
-           name: newClass.name,
-           teacherId: newClass.teacherId,
-           collegeId: collegeData.id,
-           createdAt: serverTimestamp()
-         });
-         savedClassId = classRef.id;
-       }
-
        const nextTeacherDoc = teachers.find((teacher: any) => teacher.id === newClass.teacherId || teacher.uid === newClass.teacherId);
-       if (nextTeacherDoc) {
-         await setDoc(doc(db, 'users', nextTeacherDoc.id), { classId: savedClassId, updatedAt: serverTimestamp() }, { merge: true });
-         if (nextTeacherDoc.uid && nextTeacherDoc.uid !== nextTeacherDoc.id) {
-           await setDoc(doc(db, 'users', nextTeacherDoc.uid), { classId: savedClassId, updatedAt: serverTimestamp() }, { merge: true });
-         }
+       let savedClassId = editingClass?.id || '';
+        if (editingClass) {
+          await updateDoc(doc(db, 'classes', editingClass.id), {
+            name: newClass.name,
+            teacherId: newClass.teacherId,
+            teacherUid: nextTeacherDoc?.uid || '',
+            teacherEmail: nextTeacherDoc?.email || '',
+            teacherName: nextTeacherDoc?.displayName || nextTeacherDoc?.officialName || '',
+            collegeId: collegeData.id,
+            updatedAt: serverTimestamp()
+          });
+          savedClassId = editingClass.id;
+        } else {
+          const classRef = await addDoc(collection(db, 'classes'), {
+            name: newClass.name,
+            teacherId: newClass.teacherId,
+            teacherUid: nextTeacherDoc?.uid || '',
+            teacherEmail: nextTeacherDoc?.email || '',
+            teacherName: nextTeacherDoc?.displayName || nextTeacherDoc?.officialName || '',
+            collegeId: collegeData.id,
+            createdAt: serverTimestamp()
+          });
+          savedClassId = classRef.id;
+        }
+
+        if (nextTeacherDoc) {
+          await setDoc(doc(db, 'users', nextTeacherDoc.id), { classId: savedClassId, updatedAt: serverTimestamp() }, { merge: true });
+          if (nextTeacherDoc.uid && nextTeacherDoc.uid !== nextTeacherDoc.id) {
+            await setDoc(doc(db, 'users', nextTeacherDoc.uid), { classId: savedClassId, updatedAt: serverTimestamp() }, { merge: true });
+          }
        }
 
        if (editingClass?.teacherId && editingClass.teacherId !== newClass.teacherId) {

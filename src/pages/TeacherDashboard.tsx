@@ -25,7 +25,7 @@ import TestCreator from './teacher/TestCreator';
 import TeacherReports from './teacher/Reports';
 import StudentManagement from './teacher/StudentManagement';
 import { useAuth } from '../context/AuthContext';
-import { getTeacherIdentityCandidates } from '../lib/classAccess';
+import { doesClassBelongToTeacher, getTeacherIdentityCandidates } from '../lib/classAccess';
 
 export default function TeacherDashboard() {
   const location = useLocation();
@@ -57,12 +57,12 @@ export default function TeacherDashboard() {
     }
 
     setClassLoading(true);
-    const identities = getTeacherIdentityCandidates(auth.currentUser);
+    const identities = getTeacherIdentityCandidates(auth.currentUser, profile);
     const unsubscribe = onSnapshot(
       query(collection(db, 'classes'), where('collegeId', '==', collegeId)),
       (snapshot) => {
         const classes = snapshot.docs.map((classDoc) => ({ id: classDoc.id, ...classDoc.data() })) as any[];
-        const assigned = classes.filter((classRoom) => identities.includes(classRoom.teacherId));
+        const assigned = classes.filter((classRoom) => doesClassBelongToTeacher(classRoom, identities));
         setTeacherClasses(assigned);
         setActiveClassId((current) => {
           const stored = localStorage.getItem('teacher.activeClassId') || '';
@@ -79,7 +79,7 @@ export default function TeacherDashboard() {
     );
 
     return () => unsubscribe();
-  }, [profile?.collegeId, profile?.classId, auth.currentUser?.uid, auth.currentUser?.email]);
+  }, [profile?.collegeId, profile?.classId, profile?.id, profile?.email, auth.currentUser?.uid, auth.currentUser?.email]);
 
   useEffect(() => {
     if (activeClassId) {
