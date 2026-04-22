@@ -187,29 +187,34 @@ export default function SuperAdminDashboard() {
           updatedAt: serverTimestamp()
         });
 
-        // Update Principal user record
-        if (existingUser?.uid) {
-           await updateDoc(doc(db, 'users', existingUser.uid), {
-             displayName: newCollege.principalName,
-             officialName: newCollege.principalName,
-             email: cleanEmail,
-             collegeId: editingCollege.id,
-             updatedAt: serverTimestamp()
-           });
-        } else {
-           await setDoc(doc(db, 'users', principalId), {
-             displayName: newCollege.principalName,
-             officialName: newCollege.principalName,
-             email: cleanEmail,
-             role: 'principal',
-             collegeId: editingCollege.id,
-             createdAt: (existingUser && existingUser.createdAt) || serverTimestamp(),
-             updatedAt: serverTimestamp()
-           }, { merge: true });
+        const principalPayload = {
+          displayName: newCollege.principalName,
+          officialName: newCollege.principalName,
+          email: cleanEmail,
+          role: 'principal',
+          collegeId: editingCollege.id,
+          updatedAt: serverTimestamp()
+        };
 
-           if (existingUser && existingUser.id !== principalId) {
-             await deleteDoc(doc(db, 'users', existingUser.id));
-           }
+        // Keep all known principal aliases synchronized so login and dashboard views stay aligned.
+        await setDoc(doc(db, 'users', principalId), {
+          ...principalPayload,
+          createdAt: (existingUser && existingUser.createdAt) || serverTimestamp(),
+        }, { merge: true });
+
+        if (existingUser?.id && existingUser.id !== principalId) {
+          await setDoc(doc(db, 'users', existingUser.id), {
+            ...principalPayload,
+            createdAt: existingUser.createdAt || serverTimestamp(),
+          }, { merge: true });
+        }
+
+        if (existingUser?.uid && existingUser.uid !== principalId && existingUser.uid !== existingUser.id) {
+          await setDoc(doc(db, 'users', existingUser.uid), {
+            ...principalPayload,
+            createdAt: existingUser.createdAt || serverTimestamp(),
+            uid: existingUser.uid
+          }, { merge: true });
         }
         
         setStatus({ type: 'success', message: "Institutional parameters synchronized." });
