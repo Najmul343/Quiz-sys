@@ -48,12 +48,14 @@ type TeacherReportsProps = {
   collegeIdOverride?: string;
   scopeMode?: 'teacher' | 'college';
   teacherIdsOverride?: string[];
+  classIdOverride?: string;
 };
 
 export default function TeacherReports({
   collegeIdOverride,
   scopeMode = 'teacher',
   teacherIdsOverride,
+  classIdOverride,
 }: TeacherReportsProps) {
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [tests, setTests] = useState<any[]>([]);
@@ -81,7 +83,7 @@ export default function TeacherReports({
 
       if (!collegeId) return;
       const activeClassId = scopeMode === 'teacher'
-        ? assignedClassId || (await resolveTeacherAssignedClass(db, {
+        ? classIdOverride || assignedClassId || (await resolveTeacherAssignedClass(db, {
             collegeId,
             user: auth.currentUser,
             profile: userData || null,
@@ -119,7 +121,8 @@ export default function TeacherReports({
       setTests(filteredTests);
 
       const allSubs = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const teacherSubs = allSubs.filter((s: any) => filteredTests.some((t: any) => t.id === s.testId) && (!activeClassId || s.classId === activeClassId));
+      // Class isolation should be driven by the test's classId. Submissions can be legacy and not carry classId yet.
+      const teacherSubs = allSubs.filter((s: any) => filteredTests.some((t: any) => t.id === s.testId));
       setSubmissions(teacherSubs);
 
       const studentMap: Record<string, any> = {};
@@ -131,10 +134,15 @@ export default function TeacherReports({
       });
       setStudentDirectory(studentMap);
 
+      const attendanceList = attendanceSnap.docs.map((attendanceDoc) => ({ id: attendanceDoc.id, ...attendanceDoc.data() })) as any[];
       setAttendanceRecords(
-        attendanceSnap.docs
-          .map((attendanceDoc) => ({ id: attendanceDoc.id, ...attendanceDoc.data() }))
-          .filter((attendanceRecord: any) => !activeClassId || attendanceRecord.classId === activeClassId)
+        activeClassId
+          ? attendanceList.filter((attendanceRecord: any) => {
+              if (attendanceRecord.classId === activeClassId) return true;
+              const student = studentMap[attendanceRecord.studentId];
+              return student?.classId === activeClassId;
+            })
+          : attendanceList
       );
       
       // Questions are now fetched on-demand in handleViewSubmission

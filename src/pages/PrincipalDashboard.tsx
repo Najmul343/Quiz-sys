@@ -84,6 +84,8 @@ export default function PrincipalDashboard() {
   const [settings, setSettings] = useState({ collegeName: '', location: '' });
   const [status, setStatus] = useState<{type: 'success' | 'error', message: string} | null>(null);
   const [confirmDeleteTeacher, setConfirmDeleteTeacher] = useState<string | null>(null);
+  const [legacyAttachClassId, setLegacyAttachClassId] = useState<string | null>(null);
+  const [legacyAttaching, setLegacyAttaching] = useState(false);
 
   const getAttendanceDocId = (collegeId: string, date: string, studentId: string) => `${collegeId}_${date}_${studentId}`;
   const sanitizeLegacyDocId = (value?: string | null) => (value || '').toLowerCase().trim().replace(/[^a-zA-Z0-9]/g, '_');
@@ -526,75 +528,61 @@ export default function PrincipalDashboard() {
     }
   };
 
-  const syncLegacyClassOwnership = async (classId: string, teacherId: string) => {
+  const attachLegacyAssetsToClass = async (classId: string) => {
     if (!collegeData?.id) return;
+    setLegacyAttaching(true);
+    setStatus(null);
+    try {
+      const collegeId = collegeData.id;
+      const [questionSnap, testSnap, studentSnap, attendanceSnap] = await Promise.all([
+        getDocs(query(collection(db, 'questions'), where('collegeId', '==', collegeId))),
+        getDocs(query(collection(db, 'tests'), where('collegeId', '==', collegeId))),
+        getDocs(query(collection(db, 'users'), where('collegeId', '==', collegeId), where('role', '==', 'student'))),
+        getDocs(query(collection(db, 'attendance'), where('collegeId', '==', collegeId))),
+      ]);
 
-    const teacherRecord = teachers.find((teacher: any) => teacher.id === teacherId || teacher.uid === teacherId);
-    const teacherIdentitySet = new Set(
-      [teacherId, teacherRecord?.id, teacherRecord?.uid, sanitizeLegacyDocId(teacherRecord?.email)].filter(
-        (value): value is string => Boolean(value)
-      )
-    );
+      const updates: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
 
-    if (!teacherIdentitySet.size) return;
+      questionSnap.docs.forEach((questionDoc) => {
+        const question = questionDoc.data() as any;
+        if (!question.classId) {
+          updates.push((batch) => batch.update(doc(db, 'questions', questionDoc.id), { classId, updatedAt: serverTimestamp() }));
+        }
+      });
 
-    const [questionSnap, testSnap, studentSnap, attendanceSnap, submissionSnap, progressSnap] = await Promise.all([
-      getDocs(query(collection(db, 'questions'), where('collegeId', '==', collegeData.id))),
-      getDocs(query(collection(db, 'tests'), where('collegeId', '==', collegeData.id))),
-      getDocs(query(collection(db, 'users'), where('collegeId', '==', collegeData.id), where('role', '==', 'student'))),
-      getDocs(query(collection(db, 'attendance'), where('collegeId', '==', collegeData.id))),
-      getDocs(query(collection(db, 'submissions'), where('collegeId', '==', collegeData.id))),
-      getDocs(collection(db, 'practice_progress')),
-    ]);
+      testSnap.docs.forEach((testDoc) => {
+        const test = testDoc.data() as any;
+        if (!test.classId) {
+          updates.push((batch) => batch.update(doc(db, 'tests', testDoc.id), { classId, updatedAt: serverTimestamp() }));
+        }
+      });
 
-    const studentDocs = studentSnap.docs
-      .map((studentDoc) => ({ id: studentDoc.id, ...studentDoc.data() }))
-      .filter((student: any) => teacherIdentitySet.has(student.addedBy) && !student.classId);
-    const studentIds = new Set(studentDocs.map((student: any) => student.id));
+      studentSnap.docs.forEach((studentDoc) => {
+        const student = studentDoc.data() as any;
+        if (!student.classId) {
+          updates.push((batch) => batch.update(doc(db, 'users', studentDoc.id), { classId, updatedAt: serverTimestamp() }));
+        }
+      });
 
-    const updates: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
+      attendanceSnap.docs.forEach((attendanceDoc) => {
+        const attendance = attendanceDoc.data() as any;
+        if (!attendance.classId) {
+          updates.push((batch) => batch.update(doc(db, 'attendance', attendanceDoc.id), { classId, updatedAt: serverTimestamp() }));
+        }
+      });
 
-    questionSnap.docs.forEach((questionDoc) => {
-      const question = questionDoc.data() as any;
-      if (teacherIdentitySet.has(question.createdBy) && !question.classId) {
-        updates.push((batch) => batch.update(doc(db, 'questions', questionDoc.id), { classId, updatedAt: serverTimestamp() }));
+      if (updates.length) {
+        await commitBatchChunks(updates);
       }
-    });
 
-    testSnap.docs.forEach((testDoc) => {
-      const test = testDoc.data() as any;
-      if (teacherIdentitySet.has(test.teacherId) && !test.classId) {
-        updates.push((batch) => batch.update(doc(db, 'tests', testDoc.id), { classId, updatedAt: serverTimestamp() }));
-      }
-    });
-
-    studentDocs.forEach((student: any) => {
-      updates.push((batch) => batch.update(doc(db, 'users', student.id), { classId, updatedAt: serverTimestamp() }));
-    });
-
-    attendanceSnap.docs.forEach((attendanceDoc) => {
-      const attendance = attendanceDoc.data() as any;
-      if (!attendance.classId && (teacherIdentitySet.has(attendance.teacherId) || studentIds.has(attendance.studentId))) {
-        updates.push((batch) => batch.update(doc(db, 'attendance', attendanceDoc.id), { classId, updatedAt: serverTimestamp() }));
-      }
-    });
-
-    submissionSnap.docs.forEach((submissionDoc) => {
-      const submission = submissionDoc.data() as any;
-      if (!submission.classId && studentIds.has(submission.studentId)) {
-        updates.push((batch) => batch.update(doc(db, 'submissions', submissionDoc.id), { classId, updatedAt: serverTimestamp() }));
-      }
-    });
-
-    progressSnap.docs.forEach((progressDoc) => {
-      const progress = progressDoc.data() as any;
-      if (!progress.classId && studentIds.has(progress.studentId)) {
-        updates.push((batch) => batch.update(doc(db, 'practice_progress', progressDoc.id), { classId, updatedAt: serverTimestamp() }));
-      }
-    });
-
-    if (updates.length) {
-      await commitBatchChunks(updates);
+      setStatus({ type: 'success', message: "Legacy assets attached to the selected class." });
+      setLegacyAttachClassId(null);
+      fetchDashboardData();
+    } catch (e) {
+      console.error(e);
+      setStatus({ type: 'error', message: "Legacy attachment failed. Please try again." });
+    } finally {
+      setLegacyAttaching(false);
     }
   };
 
@@ -623,8 +611,6 @@ export default function PrincipalDashboard() {
          });
          savedClassId = classRef.id;
        }
-
-       await syncLegacyClassOwnership(savedClassId, newClass.teacherId);
 
        const nextTeacherDoc = teachers.find((teacher: any) => teacher.id === newClass.teacherId || teacher.uid === newClass.teacherId);
        if (nextTeacherDoc) {
@@ -1069,12 +1055,21 @@ export default function PrincipalDashboard() {
                           Teacher: {assignedTeacher?.displayName || 'Unassigned'}
                         </p>
                       </div>
-                      <button
-                        onClick={() => handleEditClass(classRoom)}
-                        className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-[10px] font-black uppercase tracking-widest text-slate-600 hover:border-emerald-300 hover:text-emerald-600"
-                      >
-                        Edit
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setLegacyAttachClassId(classRoom.id)}
+                          className="px-3 py-2 rounded-xl bg-white border border-slate-200 text-[10px] font-black uppercase tracking-widest text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
+                        >
+                          Attach Legacy
+                        </button>
+                        <button
+                          onClick={() => handleEditClass(classRoom)}
+                          className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-[10px] font-black uppercase tracking-widest text-slate-600 hover:border-emerald-300 hover:text-emerald-600"
+                        >
+                          Edit
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -1325,6 +1320,46 @@ export default function PrincipalDashboard() {
                </div>
              </motion.div>
            </div>
+        )}
+
+        {legacyAttachClassId && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setLegacyAttachClassId(null)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
+            />
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white w-full max-w-md rounded-[3rem] p-10 relative shadow-2xl"
+            >
+              <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight mb-2">Attach Legacy Assets</h3>
+              <p className="text-[11px] text-slate-500 font-bold uppercase tracking-widest leading-relaxed mb-8">
+                This will attach any unassigned (no class) questions, tests, students, and attendance in this college to the selected class.
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                <button
+                  type="button"
+                  onClick={() => setLegacyAttachClassId(null)}
+                  className="py-4 px-6 bg-slate-50 text-slate-400 font-black rounded-2xl text-[10px] uppercase tracking-widest hover:bg-slate-100 transition-all border border-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => attachLegacyAssetsToClass(legacyAttachClassId)}
+                  disabled={legacyAttaching}
+                  className="py-4 px-6 bg-indigo-600 text-white font-black rounded-2xl text-[10px] uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-60"
+                >
+                  {legacyAttaching ? <Loader2 size={14} className="animate-spin" /> : 'Attach'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

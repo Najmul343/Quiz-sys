@@ -8,7 +8,11 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { resolveTeacherAssignedClass } from '../../lib/classAccess';
 
-export default function TeacherOverview() {
+type TeacherOverviewProps = {
+  classIdOverride?: string;
+};
+
+export default function TeacherOverview({ classIdOverride }: TeacherOverviewProps) {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const [stats, setStats] = useState({
@@ -32,12 +36,13 @@ export default function TeacherOverview() {
       const collegeId = collegeIdArg || profile?.collegeId;
 
       if (!collegeId) return;
-      const assignedClass = await resolveTeacherAssignedClass(db, {
-        collegeId,
-        user: auth.currentUser,
-        profile,
-      });
-      const activeClassId = assignedClass?.id || '';
+      const activeClassId = classIdOverride
+        ? classIdOverride
+        : (await resolveTeacherAssignedClass(db, {
+            collegeId,
+            user: auth.currentUser,
+            profile,
+          }))?.id || '';
 
       const qSnap = await getDocs(query(collection(db, 'questions'), where('collegeId', '==', collegeId)));
       const tSnap = await getDocs(query(collection(db, 'tests'), where('collegeId', '==', collegeId)));

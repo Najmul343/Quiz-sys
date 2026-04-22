@@ -26,7 +26,11 @@ import { cn } from '../../lib/utils';
 import { useAuth } from '../../context/AuthContext';
 import { resolveTeacherAssignedClass } from '../../lib/classAccess';
 
-export default function StudentManagement() {
+type StudentManagementProps = {
+  classIdOverride?: string;
+};
+
+export default function StudentManagement({ classIdOverride }: StudentManagementProps) {
   const { profile } = useAuth();
   const todayLocal = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   const [students, setStudents] = useState<any[]>([]);
@@ -163,12 +167,13 @@ export default function StudentManagement() {
       if (!collegeId) return;
       setCurrentCollegeId(collegeId);
 
-      const assignedClass = await resolveTeacherAssignedClass(db, {
-        collegeId,
-        user: auth.currentUser,
-        profile,
-      });
-      const activeClassId = assignedClass?.id || '';
+      const activeClassId = classIdOverride
+        ? classIdOverride
+        : (await resolveTeacherAssignedClass(db, {
+            collegeId,
+            user: auth.currentUser,
+            profile,
+          }))?.id || '';
       setAssignedClassId(activeClassId);
 
       const q = query(

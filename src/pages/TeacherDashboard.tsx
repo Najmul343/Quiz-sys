@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import { auth, db } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
-import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import { motion } from 'framer-motion';
 import { 
   LayoutDashboard, 
@@ -25,12 +25,16 @@ import TestCreator from './teacher/TestCreator';
 import TeacherReports from './teacher/Reports';
 import StudentManagement from './teacher/StudentManagement';
 import { useAuth } from '../context/AuthContext';
+import { getTeacherIdentityCandidates } from '../lib/classAccess';
 
 export default function TeacherDashboard() {
   const location = useLocation();
   const { profile } = useAuth();
   const [stats, setStats] = useState({ questions: 0, tests: 0, students: 0 });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [teacherClasses, setTeacherClasses] = useState<any[]>([]);
+  const [activeClassId, setActiveClassId] = useState<string>('');
+  const [classLoading, setClassLoading] = useState(false);
 
   const navItems = [
     { name: 'Overview', path: '/teacher', icon: LayoutDashboard },
@@ -43,6 +47,37 @@ export default function TeacherDashboard() {
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    const loadTeacherClasses = async () => {
+      const collegeId = profile?.collegeId;
+      if (!collegeId) return;
+      setClassLoading(true);
+      try {
+        const identities = getTeacherIdentityCandidates(auth.currentUser);
+        const snap = await getDocs(query(collection(db, 'classes'), where('collegeId', '==', collegeId)));
+        const classes = snap.docs.map((classDoc) => ({ id: classDoc.id, ...classDoc.data() })) as any[];
+        const assigned = classes.filter((classRoom) => identities.includes(classRoom.teacherId));
+        setTeacherClasses(assigned);
+
+        const stored = localStorage.getItem('teacher.activeClassId') || '';
+        const next = assigned.some((c) => c.id === stored) ? stored : (assigned[0]?.id || '');
+        setActiveClassId(next);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setClassLoading(false);
+      }
+    };
+
+    loadTeacherClasses();
+  }, [profile?.collegeId]);
+
+  useEffect(() => {
+    if (activeClassId) {
+      localStorage.setItem('teacher.activeClassId', activeClassId);
+    }
+  }, [activeClassId]);
 
   return (
     <div className="flex min-h-screen bg-[var(--bg)] text-[var(--text-main)] font-sans">
@@ -166,6 +201,25 @@ export default function TeacherDashboard() {
             <h2 className="text-lg font-extrabold text-[var(--text-main)] capitalize">
               {location.pathname.split('/').pop()?.replace('-', ' ') || 'Overview'}
             </h2>
+            <div className="hidden md:flex items-center gap-2 ml-4">
+              <span className="text-[10px] font-black uppercase tracking-widest text-[var(--text-sub)]">Class</span>
+              <select
+                value={activeClassId}
+                onChange={(e) => setActiveClassId(e.target.value)}
+                disabled={classLoading || teacherClasses.length === 0}
+                className="h-9 px-3 rounded-xl border border-[var(--border)] bg-white text-xs font-bold text-[var(--text-main)]"
+              >
+                {teacherClasses.length === 0 ? (
+                  <option value="">No class assigned</option>
+                ) : (
+                  teacherClasses.map((classRoom) => (
+                    <option key={classRoom.id} value={classRoom.id}>
+                      {classRoom.name}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
           </div>
           <div className="flex items-center gap-3 md:gap-4">
             <div className="badge hidden sm:block">Teacher Access</div>
@@ -184,11 +238,11 @@ export default function TeacherDashboard() {
 
         <div className="p-6 lg:p-8 max-w-7xl mx-auto">
           <Routes>
-            <Route index element={<TeacherOverview />} />
-            <Route path="questions" element={<QuestionBank />} />
-            <Route path="create-test" element={<TestCreator />} />
-            <Route path="reports" element={<TeacherReports />} />
-            <Route path="students" element={<StudentManagement />} />
+            <Route index element={<TeacherOverview classIdOverride={activeClassId} />} />
+            <Route path="questions" element={<QuestionBank classIdOverride={activeClassId} />} />
+            <Route path="create-test" element={<TestCreator classIdOverride={activeClassId} />} />
+            <Route path="reports" element={<TeacherReports classIdOverride={activeClassId} />} />
+            <Route path="students" element={<StudentManagement classIdOverride={activeClassId} />} />
           </Routes>
         </div>
       </main>

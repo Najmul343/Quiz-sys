@@ -37,9 +37,10 @@ type QuestionBankProps = {
   collegeIdOverride?: string;
   mode?: 'teacher' | 'principal' | 'superadmin';
   classOptions?: any[];
+  classIdOverride?: string;
 };
 
-export default function QuestionBank({ collegeIdOverride, mode = 'teacher', classOptions = [] }: QuestionBankProps) {
+export default function QuestionBank({ collegeIdOverride, mode = 'teacher', classOptions = [], classIdOverride }: QuestionBankProps) {
   const [questions, setQuestions] = useState<any[]>([]);
   const [availableColleges, setAvailableColleges] = useState<any[]>([]);
   const [availableClasses, setAvailableClasses] = useState<any[]>(classOptions);
@@ -449,6 +450,10 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher', clas
     if (mode !== 'teacher') return;
     const loadAssignedClass = async () => {
       try {
+        if (classIdOverride) {
+          setTeacherClassId(classIdOverride);
+          return;
+        }
         const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
         const userData = userDoc.data();
         const assignedClass = await resolveTeacherAssignedClass(db, {
@@ -462,7 +467,7 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher', clas
       }
     };
     loadAssignedClass();
-  }, [collegeIdOverride, mode]);
+  }, [classIdOverride, collegeIdOverride, mode]);
 
   const fetchQuestions = async () => {
     setLoading(true);
@@ -473,11 +478,11 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher', clas
 
       if (!collegeId) return;
       const activeTeacherClassId = mode === 'teacher'
-        ? teacherClassId || (await resolveTeacherAssignedClass(db, {
+        ? (classIdOverride || teacherClassId || (await resolveTeacherAssignedClass(db, {
             collegeId,
             user: auth.currentUser,
             profile: userData || null,
-          }))?.id || null
+          }))?.id) || null
         : null;
 
       if (mode === 'teacher') {

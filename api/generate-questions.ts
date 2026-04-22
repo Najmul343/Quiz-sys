@@ -1,5 +1,3 @@
-import { GoogleGenAI } from "@google/genai";
-
 type VercelRequest = {
   method?: string;
   body?: any;
@@ -46,6 +44,40 @@ Return ONLY a JSON array in this format:
   }
 ]`;
 
+type GeminiResponse = {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{ text?: string }>;
+    };
+  }>;
+  error?: { message?: string };
+};
+
+async function callGemini(apiKey: string, model: string, prompt: string) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.5,
+        responseMimeType: "application/json",
+      },
+    }),
+  });
+
+  const data = (await resp.json().catch(() => ({}))) as GeminiResponse;
+  if (!resp.ok) {
+    throw new Error(data?.error?.message || `Gemini request failed (${resp.status}).`);
+  }
+
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const text = parts.map((part) => part.text || '').join('').trim();
+  if (!text) throw new Error('No response from Gemini.');
+  return text;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
@@ -65,19 +97,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Subject, topic, difficulty, and a question count greater than 0 are required.' });
     }
 
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [{ parts: [{ text: buildPrompt(subject, topic, difficulty, parsedCount, contextText) }] }],
-      config: {
-        responseMimeType: "application/json",
-        temperature: 0.5,
-      }
-    });
+    const prompt = buildPrompt(subject, topic, difficulty, parsedCount, contextText);
+    const modelsToTry = ["gemini-2.0-flash", "gemini-1.5-flash"];
 
-    const text = typeof response.text === 'function' ? response.text() : response.text;
+    let text = "";
+    let lastError: unknown = null;
+    for (const model of modelsToTry) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        text = await callGemini(apiKey, model, prompt);
+        break;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+
     if (!text) {
-      return res.status(502).json({ error: 'No response from Gemini.' });
+      return res.status(502).json({ error: lastError instanceof Error ? lastError.message : 'No response from Gemini.' });
     }
 
     const questions = JSON.parse(text);

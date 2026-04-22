@@ -27,12 +27,14 @@ type TestCreatorProps = {
   collegeIdOverride?: string;
   viewerMode?: 'teacher' | 'college';
   teacherIdsOverride?: string[];
+  classIdOverride?: string;
 };
 
 export default function TestCreator({
   collegeIdOverride,
   viewerMode = 'teacher',
   teacherIdsOverride,
+  classIdOverride,
 }: TestCreatorProps) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -103,7 +105,7 @@ export default function TestCreator({
       if (!collegeId) return;
 
       const activeClassId = viewerMode === 'teacher'
-        ? assignedClassId || (await resolveTeacherAssignedClass(db, {
+        ? classIdOverride || assignedClassId || (await resolveTeacherAssignedClass(db, {
             collegeId,
             user: auth.currentUser,
             profile,
@@ -179,7 +181,7 @@ export default function TestCreator({
         isPractice,
         visible: isVisible,
         collegeId,
-        classId: viewerMode === 'teacher' ? assignedClassId || profile?.classId || null : null,
+        classId: viewerMode === 'teacher' ? (classIdOverride || assignedClassId || profile?.classId || null) : null,
         settings: { 
           forceFullscreen, 
           shuffleQuestions: shuffleQ, 
