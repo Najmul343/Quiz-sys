@@ -154,7 +154,7 @@ export default function TestCreator({
       const collegeId = collegeIdOverride || profile?.collegeId;
       if (!collegeId) throw new Error("College context missing.");
 
-      const testData = {
+      const baseTestData = {
         title,
         duration,
         passingMarks,
@@ -168,16 +168,21 @@ export default function TestCreator({
           authRequired 
         },
         questionIds: selectedIds,
-        teacherId: auth.currentUser?.uid,
+        teacherId: auth.currentUser?.uid || '',
         status,
         updatedAt: serverTimestamp(),
-        createdAt: editId ? undefined : serverTimestamp()
       };
 
       if (editId) {
-        await setDoc(doc(db, 'tests', editId), testData, { merge: true });
+        await setDoc(doc(db, 'tests', editId), {
+          ...baseTestData,
+          createdAt: serverTimestamp(),
+        }, { merge: true });
       } else {
-        await addDoc(collection(db, 'tests'), { ...testData, createdAt: serverTimestamp() });
+        await addDoc(collection(db, 'tests'), {
+          ...baseTestData,
+          createdAt: serverTimestamp()
+        });
       }
       await fetchQuestions(collegeId);
       if (viewerMode === 'teacher') {
@@ -185,6 +190,7 @@ export default function TestCreator({
       }
     } catch (e) {
       console.error(e);
+      alert(e instanceof Error ? e.message : "Failed to deploy assessment.");
     } finally {
       setSaving(false);
     }
