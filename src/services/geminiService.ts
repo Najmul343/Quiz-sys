@@ -1,68 +1,31 @@
-import { GoogleGenAI } from "@google/genai";
-
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
-const ai = new GoogleGenAI({ apiKey });
-
 export async function generateQuestionsAI(subject: string, topic: string, difficulty: string, count: number, contextText?: string) {
-  try {
-    if (!apiKey) {
-      throw new Error("Missing Gemini API key. Set VITE_GEMINI_API_KEY in your environment.");
-    }
-    const prompt = `Generate ${count} MCQ questions based on the following context.
-    Subject: ${subject}
-    Topic: ${topic}
-    Difficulty: ${difficulty}
-    
-    Context Information:
-    ${contextText || 'Using general knowledge about ' + topic}
-
-    IMPORTANT: Analyze if a question requires a diagram, figure, or visual aid (e.g., if it refers to "the diagram", "figure 1", "this circuit", "following graph", etc.).
-    If it does, set "needsImage" to true and provide a short "imageDescription".
-
-    MATHEMATICAL CONTENT: For any mathematical expressions, equations, or scientific notation (integration, differentiation, complex physics formulas, etc.), you MUST use LaTeX formatting wrapped in dollar signs ($...$ for inline, $$...$$ for block).
-
-    FORMATTING RULES:
-    - Write the question text and explanation in clean markdown.
-    - Preserve readable line breaks for match-the-following, assertions/reasons, tables, paragraph cases, and step-based explanations.
-    - Use short bullet lists in explanations when it improves clarity.
-    - Use **bold** only for key labels or headings when useful.
-    - Do not return HTML.
-    - If the question contains List-I / List-II or columns to match, place each item on its own line.
-
-    Return ONLY a JSON array in this format:
-    [
-      {
-        "text": "Question text here with readable markdown formatting and preserved line breaks (with LaTeX if needed)?",
-        "options": { "A": "Opt 1", "B": "Opt 2", "C": "Opt 3", "D": "Opt 4" },
-        "answer": "A",
-        "difficulty": "${difficulty}",
-        "explanation": "Why A is correct with readable markdown formatting (with LaTeX if needed)",
-        "subject": "${subject}",
-        "needsImage": true/false,
-        "imageDescription": "Description of the required diagram if needsImage is true"
-      }
-    ]`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [{ parts: [{ text: prompt }] }],
-      config: {
-        responseMimeType: "application/json",
-        temperature: 0.5,
-      }
-    });
-
-    const text = typeof response.text === 'function' ? response.text() : response.text;
-    if (!text) throw new Error("No response from AI");
-
-    const parsed = JSON.parse(text);
-    if (!Array.isArray(parsed)) {
-      throw new Error("AI returned an invalid question format.");
-    }
-
-    return parsed;
-  } catch (error) {
-    console.error("AI Question Generation Error:", error);
-    throw error;
+  const parsedCount = Number(count);
+  if (!subject || !topic || !difficulty || !Number.isFinite(parsedCount) || parsedCount < 1) {
+    throw new Error("Please choose subject, chapter/topic, and at least 1 question.");
   }
+
+  const response = await fetch('/api/generate-questions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      subject,
+      topic,
+      difficulty,
+      count: parsedCount,
+      contextText,
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error || 'AI generation request failed.');
+  }
+
+  if (!Array.isArray(payload?.questions)) {
+    throw new Error('AI returned an invalid question format.');
+  }
+
+  return payload.questions;
 }

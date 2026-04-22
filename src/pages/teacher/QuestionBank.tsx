@@ -84,6 +84,7 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher', clas
   const [fileContent, setFileContent] = useState("");
   const [isReadingFile, setIsReadingFile] = useState(false);
   const [teacherClassId, setTeacherClassId] = useState<string | null>(null);
+  const [classScopeNotice, setClassScopeNotice] = useState<string | null>(null);
   const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -164,7 +165,10 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher', clas
   };
 
   const generateWithAi = async () => {
-    if (!aiTopic && !fileContent) return;
+    if ((!aiTopic && !fileContent) || !aiSubject || !aiChapter || aiCount < 1) {
+      alert("Please choose subject, chapter, and at least 1 question.");
+      return;
+    }
     setIsGenerating(true);
     try {
       const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
@@ -478,6 +482,7 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher', clas
 
       if (mode === 'teacher') {
         setTeacherClassId(activeTeacherClassId);
+        setClassScopeNotice(activeTeacherClassId ? null : 'No class is assigned to this teacher yet. The class-scoped sections will stay blank until the principal assigns a class.');
       }
 
       const fetchedQuestions = await fetchAccessibleQuestions(db, collegeId, {
@@ -780,6 +785,13 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher', clas
           className="w-full pl-16 pr-8 py-6 bg-white border border-slate-100 rounded-[2rem] shadow-xl shadow-slate-200/40 focus:border-blue-600 outline-none transition-all font-bold text-slate-700"
         />
       </div>
+
+      {classScopeNotice && mode === 'teacher' && (
+        <div className="px-6 py-4 rounded-[2rem] border border-amber-100 bg-amber-50 text-amber-700 font-black uppercase tracking-widest text-[10px] flex items-center gap-3">
+          <Info size={16} />
+          {classScopeNotice}
+        </div>
+      )}
 
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap gap-2">

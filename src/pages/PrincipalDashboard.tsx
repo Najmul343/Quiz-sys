@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../lib/firebase';
-import { collection, query, getDocs, where, addDoc, serverTimestamp, doc, getDoc, setDoc, limit, deleteDoc, getCountFromServer, updateDoc } from 'firebase/firestore';
+import { collection, query, getDocs, where, addDoc, serverTimestamp, doc, getDoc, setDoc, limit, deleteDoc, getCountFromServer, updateDoc, writeBatch } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Users, 
@@ -518,6 +518,86 @@ export default function PrincipalDashboard() {
     setShowClassModal(true);
   };
 
+  const commitBatchChunks = async (updates: Array<(batch: ReturnType<typeof writeBatch>) => void>, chunkSize = 300) => {
+    for (let index = 0; index < updates.length; index += chunkSize) {
+      const batch = writeBatch(db);
+      updates.slice(index, index + chunkSize).forEach((applyUpdate) => applyUpdate(batch));
+      await batch.commit();
+    }
+  };
+
+  const syncLegacyClassOwnership = async (classId: string, teacherId: string) => {
+    if (!collegeData?.id) return;
+
+    const teacherRecord = teachers.find((teacher: any) => teacher.id === teacherId || teacher.uid === teacherId);
+    const teacherIdentitySet = new Set(
+      [teacherId, teacherRecord?.id, teacherRecord?.uid, sanitizeLegacyDocId(teacherRecord?.email)].filter(
+        (value): value is string => Boolean(value)
+      )
+    );
+
+    if (!teacherIdentitySet.size) return;
+
+    const [questionSnap, testSnap, studentSnap, attendanceSnap, submissionSnap, progressSnap] = await Promise.all([
+      getDocs(query(collection(db, 'questions'), where('collegeId', '==', collegeData.id))),
+      getDocs(query(collection(db, 'tests'), where('collegeId', '==', collegeData.id))),
+      getDocs(query(collection(db, 'users'), where('collegeId', '==', collegeData.id), where('role', '==', 'student'))),
+      getDocs(query(collection(db, 'attendance'), where('collegeId', '==', collegeData.id))),
+      getDocs(query(collection(db, 'submissions'), where('collegeId', '==', collegeData.id))),
+      getDocs(collection(db, 'practice_progress')),
+    ]);
+
+    const studentDocs = studentSnap.docs
+      .map((studentDoc) => ({ id: studentDoc.id, ...studentDoc.data() }))
+      .filter((student: any) => teacherIdentitySet.has(student.addedBy) && !student.classId);
+    const studentIds = new Set(studentDocs.map((student: any) => student.id));
+
+    const updates: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
+
+    questionSnap.docs.forEach((questionDoc) => {
+      const question = questionDoc.data() as any;
+      if (teacherIdentitySet.has(question.createdBy) && !question.classId) {
+        updates.push((batch) => batch.update(doc(db, 'questions', questionDoc.id), { classId, updatedAt: serverTimestamp() }));
+      }
+    });
+
+    testSnap.docs.forEach((testDoc) => {
+      const test = testDoc.data() as any;
+      if (teacherIdentitySet.has(test.teacherId) && !test.classId) {
+        updates.push((batch) => batch.update(doc(db, 'tests', testDoc.id), { classId, updatedAt: serverTimestamp() }));
+      }
+    });
+
+    studentDocs.forEach((student: any) => {
+      updates.push((batch) => batch.update(doc(db, 'users', student.id), { classId, updatedAt: serverTimestamp() }));
+    });
+
+    attendanceSnap.docs.forEach((attendanceDoc) => {
+      const attendance = attendanceDoc.data() as any;
+      if (!attendance.classId && (teacherIdentitySet.has(attendance.teacherId) || studentIds.has(attendance.studentId))) {
+        updates.push((batch) => batch.update(doc(db, 'attendance', attendanceDoc.id), { classId, updatedAt: serverTimestamp() }));
+      }
+    });
+
+    submissionSnap.docs.forEach((submissionDoc) => {
+      const submission = submissionDoc.data() as any;
+      if (!submission.classId && studentIds.has(submission.studentId)) {
+        updates.push((batch) => batch.update(doc(db, 'submissions', submissionDoc.id), { classId, updatedAt: serverTimestamp() }));
+      }
+    });
+
+    progressSnap.docs.forEach((progressDoc) => {
+      const progress = progressDoc.data() as any;
+      if (!progress.classId && studentIds.has(progress.studentId)) {
+        updates.push((batch) => batch.update(doc(db, 'practice_progress', progressDoc.id), { classId, updatedAt: serverTimestamp() }));
+      }
+    });
+
+    if (updates.length) {
+      await commitBatchChunks(updates);
+    }
+  };
+
   const handleSaveClass = async () => {
     if (!newClass.name || !newClass.teacherId || !collegeData) {
       setStatus({ type: 'error', message: "Class name and assigned teacher are required." });
@@ -543,6 +623,8 @@ export default function PrincipalDashboard() {
          });
          savedClassId = classRef.id;
        }
+
+       await syncLegacyClassOwnership(savedClassId, newClass.teacherId);
 
        const nextTeacherDoc = teachers.find((teacher: any) => teacher.id === newClass.teacherId || teacher.uid === newClass.teacherId);
        if (nextTeacherDoc) {
