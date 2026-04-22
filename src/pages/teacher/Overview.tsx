@@ -6,6 +6,7 @@ import { BookOpen, FileText, Users, TrendingUp, AlertCircle, BrainCircuit, Arrow
 import { cn } from '../../lib/utils';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { resolveTeacherAssignedClass } from '../../lib/classAccess';
 
 export default function TeacherOverview() {
   const navigate = useNavigate();
@@ -31,18 +32,26 @@ export default function TeacherOverview() {
       const collegeId = collegeIdArg || profile?.collegeId;
 
       if (!collegeId) return;
+      const assignedClass = await resolveTeacherAssignedClass(db, {
+        collegeId,
+        user: auth.currentUser,
+        profile,
+      });
+      const activeClassId = assignedClass?.id || '';
 
       const qSnap = await getDocs(query(collection(db, 'questions'), where('collegeId', '==', collegeId)));
       const tSnap = await getDocs(query(collection(db, 'tests'), where('collegeId', '==', collegeId)));
       const sSnap = await getDocs(query(collection(db, 'users'), where('role', '==', 'student'), where('collegeId', '==', collegeId)));
 
-      const tests = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const questions = qSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((question: any) => !activeClassId || question.classId === activeClassId);
+      const tests = tSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((test: any) => !activeClassId || test.classId === activeClassId);
+      const students = sSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((student: any) => !activeClassId || student.classId === activeClassId);
 
       setStats({
-        totalQuestions: qSnap.size,
+        totalQuestions: questions.length,
         activeTests: tests.filter((d: any) => d.status === 'active').length,
         draftTests: tests.filter((d: any) => d.status === 'draft').length,
-        totalStudents: sSnap.size,
+        totalStudents: students.length,
         avgPassingRate: 78
       });
       setRecentTests(tests.sort((a: any, b: any) => b.createdAt?.seconds - a.createdAt?.seconds).slice(0, 3));

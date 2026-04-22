@@ -61,6 +61,7 @@ export default function StudentDashboard() {
       const userData = userDoc.data();
       setOfficialName(userData?.officialName || userData?.displayName || auth.currentUser?.displayName || "");
       const collegeId = userData?.collegeId;
+      const classId = userData?.classId;
 
       if (!collegeId) return;
 
@@ -79,8 +80,12 @@ export default function StudentDashboard() {
         ))
       ]);
 
-      const testList = testSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
-      setTests(testList);
+      const testList = testSnap.docs
+        .map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+      const visibleTests = classId
+        ? testList.filter((test: any) => test.classId === classId)
+        : testList;
+      setTests(visibleTests);
 
       const subList = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
       setSubmissions(subList);
@@ -97,7 +102,7 @@ export default function StudentDashboard() {
       const trend = [...subList].reverse().map((s, i) => ({
         iteration: i + 1,
         score: Math.round(s.percentage || (s.score/s.total*100)),
-        title: testList.find(t => t.id === (s as any).testId)?.title || 'Test'
+        title: visibleTests.find(t => t.id === (s as any).testId)?.title || 'Test'
       }));
       setGrowthData(trend);
 

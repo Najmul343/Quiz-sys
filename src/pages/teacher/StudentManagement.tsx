@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useAuth } from '../../context/AuthContext';
+import { resolveTeacherAssignedClass } from '../../lib/classAccess';
 
 export default function StudentManagement() {
   const { profile } = useAuth();
@@ -38,6 +39,7 @@ export default function StudentManagement() {
   const [status, setStatus] = useState<{type: 'success' | 'error', message: string} | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [currentCollegeId, setCurrentCollegeId] = useState('');
+  const [assignedClassId, setAssignedClassId] = useState('');
   const [attendanceDate, setAttendanceDate] = useState(todayLocal);
   const [attendanceRecords, setAttendanceRecords] = useState<Record<string, 'present' | 'absent' | 'late'>>({});
   const [attendanceLoading, setAttendanceLoading] = useState(false);
@@ -75,6 +77,7 @@ export default function StudentManagement() {
         studentId: nextStudent.id,
         studentName: nextStudentName,
         studentRollNo: nextStudent.rollNo || '',
+        classId: nextStudent.classId || '',
         updatedAt: serverTimestamp(),
       });
     });
@@ -84,6 +87,7 @@ export default function StudentManagement() {
         studentId: nextStudent.id,
         studentName: nextStudentName,
         studentRollNo: nextStudent.rollNo || '',
+        classId: nextStudent.classId || '',
         updatedAt: serverTimestamp(),
       });
     });
@@ -93,6 +97,7 @@ export default function StudentManagement() {
         studentId: nextStudent.id,
         studentName: nextStudentName,
         studentRollNo: nextStudent.rollNo || '',
+        classId: nextStudent.classId || '',
         updatedAt: serverTimestamp(),
       });
     });
@@ -158,13 +163,23 @@ export default function StudentManagement() {
       if (!collegeId) return;
       setCurrentCollegeId(collegeId);
 
+      const assignedClass = await resolveTeacherAssignedClass(db, {
+        collegeId,
+        user: auth.currentUser,
+        profile,
+      });
+      const activeClassId = assignedClass?.id || '';
+      setAssignedClassId(activeClassId);
+
       const q = query(
         collection(db, 'users'), 
         where('role', '==', 'student'),
         where('collegeId', '==', collegeId)
       );
       const snap = await getDocs(q);
-      const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const list = snap.docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .filter((student: any) => !activeClassId || student.classId === activeClassId);
       
       // Sort students roll no wise
       list.sort((a: any, b: any) => {
@@ -188,6 +203,7 @@ export default function StudentManagement() {
       setAttendanceSavingStudentId(student.id);
       await setDoc(doc(db, 'attendance', getAttendanceDocId(currentCollegeId, attendanceDate, student.id)), {
         collegeId: currentCollegeId,
+        classId: assignedClassId,
         date: attendanceDate,
         studentId: student.id,
         studentName: student.officialName || student.displayName,
@@ -236,6 +252,7 @@ export default function StudentManagement() {
         trade: newStudent.trade,
         role: 'student',
         collegeId,
+        classId: assignedClassId,
         addedBy: auth.currentUser?.uid,
         createdAt: serverTimestamp()
       });
@@ -285,6 +302,7 @@ export default function StudentManagement() {
           email: cleanEmail,
           rollNo: editingStudent.rollNo,
           trade: editingStudent.trade,
+          classId: assignedClassId,
           updatedAt: serverTimestamp()
         });
       } else {
@@ -297,6 +315,7 @@ export default function StudentManagement() {
           trade: editingStudent.trade,
           role: 'student',
           collegeId,
+          classId: assignedClassId,
           addedBy: editingStudent.addedBy || auth.currentUser?.uid,
           createdAt: editingStudent.createdAt || serverTimestamp(),
           updatedAt: serverTimestamp()
@@ -315,6 +334,7 @@ export default function StudentManagement() {
           officialName: editingStudent.officialName,
           displayName: editingStudent.officialName,
           rollNo: editingStudent.rollNo,
+          classId: assignedClassId,
         }, oldStudentName);
       }
 

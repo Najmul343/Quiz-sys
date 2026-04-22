@@ -1,12 +1,12 @@
 import { GoogleGenAI } from "@google/genai";
 
-const apiKey = process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY || "";
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
 const ai = new GoogleGenAI({ apiKey });
 
 export async function generateQuestionsAI(subject: string, topic: string, difficulty: string, count: number, contextText?: string) {
   try {
     if (!apiKey) {
-      throw new Error("Missing Gemini API key. Set GEMINI_API_KEY in your environment.");
+      throw new Error("Missing Gemini API key. Set VITE_GEMINI_API_KEY in your environment.");
     }
     const prompt = `Generate ${count} MCQ questions based on the following context.
     Subject: ${subject}
@@ -44,17 +44,23 @@ export async function generateQuestionsAI(subject: string, topic: string, diffic
     ]`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.5-flash",
       contents: [{ parts: [{ text: prompt }] }],
       config: {
-        responseMimeType: "application/json"
+        responseMimeType: "application/json",
+        temperature: 0.5,
       }
     });
 
-    const text = response.text;
+    const text = typeof response.text === 'function' ? response.text() : response.text;
     if (!text) throw new Error("No response from AI");
-    
-    return JSON.parse(text);
+
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) {
+      throw new Error("AI returned an invalid question format.");
+    }
+
+    return parsed;
   } catch (error) {
     console.error("AI Question Generation Error:", error);
     throw error;

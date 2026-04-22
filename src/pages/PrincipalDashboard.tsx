@@ -525,6 +525,7 @@ export default function PrincipalDashboard() {
     }
     setSaving(true);
     try {
+       let savedClassId = editingClass?.id || '';
        if (editingClass) {
          await updateDoc(doc(db, 'classes', editingClass.id), {
            name: newClass.name,
@@ -532,18 +533,42 @@ export default function PrincipalDashboard() {
            collegeId: collegeData.id,
            updatedAt: serverTimestamp()
          });
+         savedClassId = editingClass.id;
        } else {
-         await addDoc(collection(db, 'classes'), {
+         const classRef = await addDoc(collection(db, 'classes'), {
            name: newClass.name,
            teacherId: newClass.teacherId,
            collegeId: collegeData.id,
            createdAt: serverTimestamp()
          });
+         savedClassId = classRef.id;
        }
+
+       const nextTeacherDoc = teachers.find((teacher: any) => teacher.id === newClass.teacherId || teacher.uid === newClass.teacherId);
+       if (nextTeacherDoc) {
+         await setDoc(doc(db, 'users', nextTeacherDoc.id), { classId: savedClassId, updatedAt: serverTimestamp() }, { merge: true });
+         if (nextTeacherDoc.uid && nextTeacherDoc.uid !== nextTeacherDoc.id) {
+           await setDoc(doc(db, 'users', nextTeacherDoc.uid), { classId: savedClassId, updatedAt: serverTimestamp() }, { merge: true });
+         }
+       }
+
+       if (editingClass?.teacherId && editingClass.teacherId !== newClass.teacherId) {
+         const remainingClassForOldTeacher = classes.find((classRoom) => classRoom.id !== editingClass.id && classRoom.teacherId === editingClass.teacherId);
+         if (!remainingClassForOldTeacher) {
+           const oldTeacherDoc = teachers.find((teacher: any) => teacher.id === editingClass.teacherId || teacher.uid === editingClass.teacherId);
+           if (oldTeacherDoc) {
+             await setDoc(doc(db, 'users', oldTeacherDoc.id), { classId: '' }, { merge: true });
+             if (oldTeacherDoc.uid && oldTeacherDoc.uid !== oldTeacherDoc.id) {
+               await setDoc(doc(db, 'users', oldTeacherDoc.uid), { classId: '' }, { merge: true });
+             }
+           }
+         }
+       }
+
        setShowClassModal(false);
        setEditingClass(null);
        setNewClass({ name: '', teacherId: '' });
-       setStatus({ type: 'success', message: editingClass ? "Classroom reassigned successfully." : "Classroom created successfully." });
+        setStatus({ type: 'success', message: editingClass ? "Classroom reassigned successfully." : "Classroom created successfully." });
        fetchDashboardData();
     } catch (e) {
        console.error(e);
@@ -1062,7 +1087,7 @@ export default function PrincipalDashboard() {
       </>
     )}
 
-        {activeTab === 'bank' && <QuestionBank collegeIdOverride={profile?.collegeId} mode="principal" />}
+        {activeTab === 'bank' && <QuestionBank collegeIdOverride={profile?.collegeId} mode="principal" classOptions={classes} />}
         {activeTab === 'tests' && (
           <TestCreator
             collegeIdOverride={profile?.collegeId}

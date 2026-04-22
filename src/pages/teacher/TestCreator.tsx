@@ -21,6 +21,7 @@ import { cn } from '../../lib/utils';
 import { fetchAccessibleQuestions } from '../../lib/questionAccess';
 import MathRenderer from '../../components/MathRenderer';
 import { useAuth } from '../../context/AuthContext';
+import { resolveTeacherAssignedClass } from '../../lib/classAccess';
 
 type TestCreatorProps = {
   collegeIdOverride?: string;
@@ -43,6 +44,7 @@ export default function TestCreator({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [assignedClassId, setAssignedClassId] = useState<string | null>(null);
 
   // Test settings
   const [title, setTitle] = useState("");
@@ -100,7 +102,21 @@ export default function TestCreator({
 
       if (!collegeId) return;
 
-      const fetchedQuestions = await fetchAccessibleQuestions(db, collegeId);
+      const activeClassId = viewerMode === 'teacher'
+        ? assignedClassId || (await resolveTeacherAssignedClass(db, {
+            collegeId,
+            user: auth.currentUser,
+            profile,
+          }))?.id || null
+        : null;
+      if (viewerMode === 'teacher') {
+        setAssignedClassId(activeClassId);
+      }
+
+      const fetchedQuestions = await fetchAccessibleQuestions(db, collegeId, {
+        classId: activeClassId,
+        mode: viewerMode,
+      });
       setQuestions(fetchedQuestions);
 
       if (viewerMode === 'college') {
@@ -120,7 +136,7 @@ export default function TestCreator({
         });
 
         const scopedResults = await Promise.allSettled(scopedQueries);
-        const tests = dedupeById(
+      const tests = dedupeById(
           scopedResults.flatMap((result) =>
             result.status === 'fulfilled'
               ? result.value.docs.map((testDoc) => ({ id: testDoc.id, ...testDoc.data() }))
@@ -138,7 +154,9 @@ export default function TestCreator({
         where('teacherId', '==', auth.currentUser?.uid)
       );
       const testSnap = await getDocs(testsQuery);
-      const tests = testSnap.docs.map(testDoc => ({ id: testDoc.id, ...testDoc.data() }));
+      const tests = testSnap.docs
+        .map(testDoc => ({ id: testDoc.id, ...testDoc.data() }))
+        .filter((test: any) => !activeClassId || test.classId === activeClassId);
       setTeacherTests([...tests].sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
     } catch (e) {
       console.error(e);
@@ -161,6 +179,7 @@ export default function TestCreator({
         isPractice,
         visible: isVisible,
         collegeId,
+        classId: viewerMode === 'teacher' ? assignedClassId || profile?.classId || null : null,
         settings: { 
           forceFullscreen, 
           shuffleQuestions: shuffleQ, 

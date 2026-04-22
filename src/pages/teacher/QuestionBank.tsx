@@ -22,6 +22,7 @@ import {
   Info
 } from 'lucide-react';
 import { cn, getDirectImageUrl } from '../../lib/utils';
+import { resolveTeacherAssignedClass } from '../../lib/classAccess';
 import { fetchAccessibleQuestions } from '../../lib/questionAccess';
 import { generateQuestionsAI } from '../../services/geminiService';
 import * as pdfjs from 'pdfjs-dist';
@@ -35,11 +36,13 @@ pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/$
 type QuestionBankProps = {
   collegeIdOverride?: string;
   mode?: 'teacher' | 'principal' | 'superadmin';
+  classOptions?: any[];
 };
 
-export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: QuestionBankProps) {
+export default function QuestionBank({ collegeIdOverride, mode = 'teacher', classOptions = [] }: QuestionBankProps) {
   const [questions, setQuestions] = useState<any[]>([]);
   const [availableColleges, setAvailableColleges] = useState<any[]>([]);
+  const [availableClasses, setAvailableClasses] = useState<any[]>(classOptions);
   const [loading, setLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
@@ -52,7 +55,10 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
   const [sharingQuestionBank, setSharingQuestionBank] = useState(false);
   const [shareNote, setShareNote] = useState('');
   const [shareTargetCollegeId, setShareTargetCollegeId] = useState('');
+  const [shareTargetClassId, setShareTargetClassId] = useState('');
   const [shareScopeType, setShareScopeType] = useState<'subject' | 'chapter'>('subject');
+  const [shareGrants, setShareGrants] = useState<any[]>([]);
+  const [loadingShareGrants, setLoadingShareGrants] = useState(false);
   const [renameSubjectFrom, setRenameSubjectFrom] = useState('');
   const [renameSubjectTo, setRenameSubjectTo] = useState('');
   const [renameChapterFrom, setRenameChapterFrom] = useState('');
@@ -77,6 +83,7 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [fileContent, setFileContent] = useState("");
   const [isReadingFile, setIsReadingFile] = useState(false);
+  const [teacherClassId, setTeacherClassId] = useState<string | null>(null);
   const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -163,6 +170,13 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
       const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
       const userData = userDoc.data();
       const collegeId = userData?.collegeId;
+      const assignedClassId = mode === 'teacher'
+        ? teacherClassId || (await resolveTeacherAssignedClass(db, {
+            collegeId,
+            user: auth.currentUser,
+            profile: userData || null,
+          }))?.id || null
+        : null;
 
       const questionsData = await generateQuestionsAI(aiSubject, aiTopic, aiDiff, aiCount, fileContent);
       
@@ -174,6 +188,7 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
           imageDescription: q.imageDescription || "",
           subject: aiSubject,
           chapter: aiChapter || aiTopic || (uploadedFile?.name.split('.')[0]) || "AI Generated",
+          classId: assignedClassId,
           createdAt: serverTimestamp(),
           createdBy: auth.currentUser?.uid
         });
@@ -187,7 +202,7 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
       setFileContent("");
     } catch (e) {
       console.error(e);
-      alert("AI Generation failed. Please try again.");
+      alert(e instanceof Error ? e.message : "AI Generation failed. Please try again.");
     } finally {
       setIsGenerating(false);
     }
@@ -299,8 +314,10 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
     const userData = userDoc.data();
     const sourceCollegeId = collegeIdOverride || userData?.collegeId;
 
-    if (!sourceCollegeId || !shareTargetCollegeId) return;
-    if (sourceCollegeId === shareTargetCollegeId) {
+    if (!sourceCollegeId) return;
+    if (mode === 'superadmin' && !shareTargetCollegeId) return;
+    if (mode === 'principal' && !shareTargetClassId) return;
+    if (mode === 'superadmin' && sourceCollegeId === shareTargetCollegeId) {
       alert('Choose another college to share with.');
       return;
     }
@@ -325,7 +342,8 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
     try {
       await addDoc(collection(db, 'question_shares'), {
         sourceCollegeId,
-        targetCollegeId: shareTargetCollegeId,
+        targetCollegeId: mode === 'principal' ? sourceCollegeId : shareTargetCollegeId,
+        targetClassId: mode === 'principal' ? shareTargetClassId : '',
         scopeType: shareScopeType,
         subject,
         chapter: shareScopeType === 'chapter' ? chapter : '',
@@ -334,13 +352,25 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
         createdAt: serverTimestamp(),
       });
       setShareNote('');
+      setShareTargetClassId('');
       setShowSharePanel(false);
+      await fetchShareGrants();
       alert('Question bank access shared successfully.');
     } catch (error) {
       console.error(error);
       alert('Failed to share question bank access.');
     } finally {
       setSharingQuestionBank(false);
+    }
+  };
+
+  const handleRevokeShareGrant = async (grantId: string) => {
+    try {
+      await deleteDoc(doc(db, 'question_shares', grantId));
+      await fetchShareGrants();
+    } catch (error) {
+      console.error(error);
+      alert('Failed to revoke question bank access.');
     }
   };
 
@@ -368,7 +398,11 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
 
   useEffect(() => {
     fetchQuestions();
-  }, []);
+  }, [teacherClassId]);
+
+  useEffect(() => {
+    setAvailableClasses(classOptions);
+  }, [classOptions]);
 
   useEffect(() => {
     if (mode !== 'superadmin') return;
@@ -383,6 +417,49 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
     loadColleges();
   }, [mode]);
 
+  useEffect(() => {
+    if (mode !== 'principal') return;
+    const loadPrincipalClasses = async () => {
+      if (classOptions.length) return;
+      try {
+        const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+        const userData = userDoc.data();
+        const collegeId = collegeIdOverride || userData?.collegeId;
+        if (!collegeId) return;
+        const classesSnap = await getDocs(query(collection(db, 'classes'), where('collegeId', '==', collegeId)));
+        setAvailableClasses(classesSnap.docs.map((classDoc) => ({ id: classDoc.id, ...classDoc.data() })));
+      } catch (error) {
+        console.error(error);
+      }
+    };
+    loadPrincipalClasses();
+  }, [classOptions, collegeIdOverride, mode]);
+
+  useEffect(() => {
+    if (showSharePanel && mode === 'principal') {
+      fetchShareGrants();
+    }
+  }, [mode, showSharePanel]);
+
+  useEffect(() => {
+    if (mode !== 'teacher') return;
+    const loadAssignedClass = async () => {
+      try {
+        const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+        const userData = userDoc.data();
+        const assignedClass = await resolveTeacherAssignedClass(db, {
+          collegeId: collegeIdOverride || userData?.collegeId,
+          user: auth.currentUser,
+          profile: userData || null,
+        });
+        setTeacherClassId(assignedClass?.id || null);
+      } catch (error) {
+        console.error(error);
+      }
+    };
+    loadAssignedClass();
+  }, [collegeIdOverride, mode]);
+
   const fetchQuestions = async () => {
     setLoading(true);
     try {
@@ -391,13 +468,49 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
       const collegeId = collegeIdOverride || userData?.collegeId;
 
       if (!collegeId) return;
-      const fetchedQuestions = await fetchAccessibleQuestions(db, collegeId);
+      const activeTeacherClassId = mode === 'teacher'
+        ? teacherClassId || (await resolveTeacherAssignedClass(db, {
+            collegeId,
+            user: auth.currentUser,
+            profile: userData || null,
+          }))?.id || null
+        : null;
+
+      if (mode === 'teacher') {
+        setTeacherClassId(activeTeacherClassId);
+      }
+
+      const fetchedQuestions = await fetchAccessibleQuestions(db, collegeId, {
+        classId: activeTeacherClassId,
+        mode,
+      });
       fetchedQuestions.sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setQuestions(fetchedQuestions);
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchShareGrants = async () => {
+    if (mode !== 'principal') return;
+    setLoadingShareGrants(true);
+    try {
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
+      const userData = userDoc.data();
+      const collegeId = collegeIdOverride || userData?.collegeId;
+      if (!collegeId) return;
+      const shareSnap = await getDocs(query(collection(db, 'question_shares'), where('sourceCollegeId', '==', collegeId)));
+      setShareGrants(
+        shareSnap.docs
+          .map((shareDoc) => ({ id: shareDoc.id, ...shareDoc.data() }))
+          .filter((share: any) => !!share.targetClassId)
+      );
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setLoadingShareGrants(false);
     }
   };
 
@@ -408,10 +521,14 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
       const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
       const userData = userDoc.data();
       const collegeId = userData?.collegeId;
+      const assignedClassId = mode === 'teacher'
+        ? teacherClassId || userData?.classId || null
+        : null;
 
       const data: any = {
         ...form,
         collegeId,
+        classId: assignedClassId,
         updatedAt: serverTimestamp(),
         createdBy: auth.currentUser?.uid
       };
@@ -479,6 +596,9 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
       const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
       const userData = userDoc.data();
       const collegeId = userData?.collegeId;
+      const assignedClassId = mode === 'teacher'
+        ? teacherClassId || userData?.classId || null
+        : null;
 
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i];
@@ -516,6 +636,7 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
           chapter: chapterName || (activeChapter === 'all' ? 'Bulk Upload' : activeChapter),
           contextualData: contextText,
           collegeId,
+          classId: assignedClassId,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
           createdBy: auth.currentUser?.uid
@@ -629,20 +750,21 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
             <Edit3 size={20} />
             <span className="text-xs uppercase tracking-widest leading-none">Rename Tags</span>
           </button>
-          {mode === 'superadmin' && (
+          {(mode === 'superadmin' || mode === 'principal') && (
             <button
               type="button"
               onClick={() => {
                 setRenameSubjectFrom(activeSubject !== 'all' ? activeSubject : uniqueSubjects[0] || '');
                 setRenameChapterFrom(activeChapter !== 'all' ? activeChapter : uniqueChapters[0] || '');
                 setShareTargetCollegeId('');
+                setShareTargetClassId('');
                 setShareNote('');
                 setShowSharePanel(true);
               }}
               className="flex items-center gap-2 bg-purple-50 text-purple-700 hover:bg-purple-100 font-black px-6 py-4 rounded-2xl border border-purple-100 transition-all shadow-sm"
             >
               <ShieldCheck size={20} />
-              <span className="text-xs uppercase tracking-widest leading-none">Share Bank</span>
+              <span className="text-xs uppercase tracking-widest leading-none">{mode === 'principal' ? 'Share To Class' : 'Share Bank'}</span>
             </button>
           )}
         </div>
@@ -1124,7 +1246,7 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
             </motion.div>
           </div>
         )}
-        {showSharePanel && mode === 'superadmin' && (
+        {showSharePanel && (mode === 'superadmin' || mode === 'principal') && (
           <div className="fixed inset-0 z-[53] flex items-center justify-center p-4 bg-slate-900/45 backdrop-blur-md">
             <motion.div
               initial={{ scale: 0.95, opacity: 0, y: 18 }}
@@ -1135,36 +1257,60 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
               <div className="p-6 sm:p-8 border-b border-slate-100">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Super Admin Share</p>
-                    <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter italic">Assign question access to another college</h3>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                      {mode === 'principal' ? 'Principal Share' : 'Super Admin Share'}
+                    </p>
+                    <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter italic">
+                      {mode === 'principal' ? 'Assign question access to a class teacher' : 'Assign question access to another college'}
+                    </h3>
                   </div>
                   <button onClick={() => setShowSharePanel(false)} className="p-2 text-slate-400 hover:text-slate-900">
                     <X size={20} />
                   </button>
                 </div>
                 <p className="mt-2 text-sm text-slate-500 font-medium">
-                  Share either a whole subject or a chapter so another principal can use the same question bank.
+                  {mode === 'principal'
+                    ? 'Share either a whole subject or a chapter with one class. Reassigning that class to a new teacher preserves the same access automatically.'
+                    : 'Share either a whole subject or a chapter so another principal can use the same question bank.'}
                 </p>
               </div>
 
               <div className="p-6 sm:p-8 grid grid-cols-1 md:grid-cols-2 gap-5">
-                <div className="space-y-3 md:col-span-2">
-                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Target College</label>
-                  <select
-                    value={shareTargetCollegeId}
-                    onChange={(e) => setShareTargetCollegeId(e.target.value)}
-                    className="w-full px-4 py-4 rounded-2xl border border-slate-200 bg-slate-50 font-bold text-slate-700 outline-none"
-                  >
-                    <option value="">Choose destination college</option>
-                    {availableColleges
-                      .filter((college) => college.id !== (collegeIdOverride || ''))
-                      .map((college) => (
-                        <option key={college.id} value={college.id}>
-                          {college.name}
+                {mode === 'superadmin' ? (
+                  <div className="space-y-3 md:col-span-2">
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Target College</label>
+                    <select
+                      value={shareTargetCollegeId}
+                      onChange={(e) => setShareTargetCollegeId(e.target.value)}
+                      className="w-full px-4 py-4 rounded-2xl border border-slate-200 bg-slate-50 font-bold text-slate-700 outline-none"
+                    >
+                      <option value="">Choose destination college</option>
+                      {availableColleges
+                        .filter((college) => college.id !== (collegeIdOverride || ''))
+                        .map((college) => (
+                          <option key={college.id} value={college.id}>
+                            {college.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="space-y-3 md:col-span-2">
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Target Class</label>
+                    <select
+                      value={shareTargetClassId}
+                      onChange={(e) => setShareTargetClassId(e.target.value)}
+                      className="w-full px-4 py-4 rounded-2xl border border-slate-200 bg-slate-50 font-bold text-slate-700 outline-none"
+                    >
+                      <option value="">Choose class</option>
+                      {availableClasses.map((classRoom) => (
+                        <option key={classRoom.id} value={classRoom.id}>
+                          {classRoom.name}
                         </option>
                       ))}
-                  </select>
-                </div>
+                    </select>
+                  </div>
+                )}
 
                 <div className="space-y-3">
                   <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Share Scope</label>
@@ -1213,10 +1359,48 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
                   <input
                     value={shareNote}
                     onChange={(e) => setShareNote(e.target.value)}
-                    placeholder="Optional note for the principal"
+                    placeholder={mode === 'principal' ? 'Optional note for the teacher' : 'Optional note for the principal'}
                     className="w-full px-4 py-4 rounded-2xl border border-slate-200 bg-white font-bold text-slate-700 outline-none"
                   />
                 </div>
+
+                {mode === 'principal' && (
+                  <div className="space-y-3 md:col-span-2">
+                    <div className="flex items-center justify-between gap-4">
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Active Shares</label>
+                      {loadingShareGrants && <Loader2 size={14} className="animate-spin text-slate-400" />}
+                    </div>
+                    <div className="space-y-3 max-h-52 overflow-y-auto pr-2">
+                      {shareGrants.map((grant) => {
+                        const classRoom = availableClasses.find((item) => item.id === grant.targetClassId);
+                        return (
+                          <div key={grant.id} className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                            <div>
+                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-700">
+                                {grant.subject}{grant.scopeType === 'chapter' && grant.chapter ? ` / ${grant.chapter}` : ''}
+                              </p>
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                                {classRoom?.name || 'Unknown Class'}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleRevokeShareGrant(grant.id)}
+                              className="px-3 py-2 rounded-xl border border-rose-100 bg-white text-[10px] font-black uppercase tracking-widest text-rose-600"
+                            >
+                              Revoke
+                            </button>
+                          </div>
+                        );
+                      })}
+                      {!loadingShareGrants && shareGrants.length === 0 && (
+                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">
+                          No class shares active
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="p-6 sm:p-8 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row gap-3">
@@ -1230,7 +1414,7 @@ export default function QuestionBank({ collegeIdOverride, mode = 'teacher' }: Qu
                 <button
                   type="button"
                   onClick={handleShareQuestionBank}
-                  disabled={sharingQuestionBank || !shareTargetCollegeId}
+                  disabled={sharingQuestionBank || (mode === 'superadmin' ? !shareTargetCollegeId : !shareTargetClassId)}
                   className="px-6 py-4 rounded-2xl bg-purple-600 text-white font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2 shadow-lg shadow-purple-100 disabled:opacity-50"
                 >
                   {sharingQuestionBank ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
