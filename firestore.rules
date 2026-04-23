@@ -106,7 +106,6 @@ service cloud.firestore {
                data.sourceCollegeId.size() > 0 &&
                data.targetCollegeId is string &&
                data.targetCollegeId.size() > 0 &&
-               (!('targetClassId' in data) || data.targetClassId is string) &&
                data.scopeType in ['subject', 'chapter'] &&
                data.subject is string &&
                data.subject.size() > 0 &&
@@ -119,9 +118,9 @@ service cloud.firestore {
       }
 
       allow read: if isSuperAdmin() || (isSignedIn() && (isCollegeMember(existing().targetCollegeId) || isCollegeMember(existing().sourceCollegeId)));
-      allow create: if (isSuperAdmin() || isPrincipal(incoming().sourceCollegeId)) && isValidQuestionShare(incoming());
-      allow update: if (isSuperAdmin() || isPrincipal(existing().sourceCollegeId)) && isValidQuestionShare(incoming());
-      allow delete: if isSuperAdmin() || (isSignedIn() && isPrincipal(existing().sourceCollegeId));
+      allow create: if isSuperAdmin() && isValidQuestionShare(incoming());
+      allow update: if isSuperAdmin() && isValidQuestionShare(incoming());
+      allow delete: if isSuperAdmin();
     }
 
     // --- Test Rules ---

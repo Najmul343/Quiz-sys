@@ -6,13 +6,8 @@ import { BookOpen, FileText, Users, TrendingUp, AlertCircle, BrainCircuit, Arrow
 import { cn } from '../../lib/utils';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { resolveTeacherAssignedClass } from '../../lib/classAccess';
 
-type TeacherOverviewProps = {
-  classIdOverride?: string;
-};
-
-export default function TeacherOverview({ classIdOverride }: TeacherOverviewProps) {
+export default function TeacherOverview() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const [stats, setStats] = useState({
@@ -29,34 +24,25 @@ export default function TeacherOverview({ classIdOverride }: TeacherOverviewProp
     if (profile?.collegeId) {
       fetchStats(profile.collegeId);
     }
-  }, [profile, classIdOverride]);
+  }, [profile]);
 
   const fetchStats = async (collegeIdArg?: string) => {
     try {
       const collegeId = collegeIdArg || profile?.collegeId;
 
       if (!collegeId) return;
-      const activeClassId = classIdOverride
-        ? classIdOverride
-        : (await resolveTeacherAssignedClass(db, {
-            collegeId,
-            user: auth.currentUser,
-            profile,
-          }))?.id || '';
 
       const qSnap = await getDocs(query(collection(db, 'questions'), where('collegeId', '==', collegeId)));
       const tSnap = await getDocs(query(collection(db, 'tests'), where('collegeId', '==', collegeId)));
       const sSnap = await getDocs(query(collection(db, 'users'), where('role', '==', 'student'), where('collegeId', '==', collegeId)));
 
-      const questions = qSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((question: any) => !activeClassId || question.classId === activeClassId);
-      const tests = tSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((test: any) => !activeClassId || test.classId === activeClassId);
-      const students = sSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((student: any) => !activeClassId || student.classId === activeClassId);
+      const tests = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
       setStats({
-        totalQuestions: questions.length,
+        totalQuestions: qSnap.size,
         activeTests: tests.filter((d: any) => d.status === 'active').length,
         draftTests: tests.filter((d: any) => d.status === 'draft').length,
-        totalStudents: students.length,
+        totalStudents: sSnap.size,
         avgPassingRate: 78
       });
       setRecentTests(tests.sort((a: any, b: any) => b.createdAt?.seconds - a.createdAt?.seconds).slice(0, 3));

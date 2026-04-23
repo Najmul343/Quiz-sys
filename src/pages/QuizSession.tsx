@@ -41,7 +41,6 @@ export default function QuizSession() {
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
 
   const [studentRollNo, setStudentRollNo] = useState("N/A");
-  const [studentClassId, setStudentClassId] = useState("");
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -96,7 +95,6 @@ export default function QuizSession() {
         // FORCE officialName if exists, else displayName
         setStudentName(data.officialName || data.displayName || auth.currentUser.displayName || "");
         setStudentRollNo(data.rollNo || "N/A");
-        setStudentClassId(data.classId || "");
       }
     } catch (e) {
       console.error("Identity fetch error:", e);
@@ -231,7 +229,6 @@ export default function QuizSession() {
     try {
       await setDoc(doc(db, 'practice_progress', `${auth.currentUser.uid}_${testId}`), {
         studentId: auth.currentUser.uid,
-        classId: studentClassId || test?.classId || '',
         testId,
         answers: currentAnswers,
         reviewIds: currentReviews,
@@ -272,7 +269,6 @@ export default function QuizSession() {
         studentRollNo: studentRollNo,
         testId: test?.id,
         collegeId: test?.collegeId || null,
-        classId: studentClassId || test?.classId || '',
         answers, 
         score: rightAnswers,
         total: totalQuestions,

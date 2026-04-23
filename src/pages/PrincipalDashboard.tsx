@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../lib/firebase';
-import { collection, query, getDocs, where, addDoc, serverTimestamp, doc, getDoc, setDoc, limit, deleteDoc, getCountFromServer, updateDoc, writeBatch } from 'firebase/firestore';
+import { collection, query, getDocs, where, addDoc, serverTimestamp, doc, getDoc, setDoc, limit, deleteDoc, getCountFromServer, updateDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Users, 
@@ -63,13 +63,11 @@ export default function PrincipalDashboard() {
   const [showTeacherModal, setShowTeacherModal] = useState(false);
   const [showClassModal, setShowClassModal] = useState(false);
   const [teachers, setTeachers] = useState<any[]>([]);
-  const [classes, setClasses] = useState<any[]>([]);
   const [students, setStudents] = useState<any[]>([]);
   const [recentSubmissions, setRecentSubmissions] = useState<any[]>([]);
   const [newTeacher, setNewTeacher] = useState({ name: '', email: '' });
   const [editingTeacher, setEditingTeacher] = useState<any>(null);
   const [newClass, setNewClass] = useState({ name: '', teacherId: '' });
-  const [editingClass, setEditingClass] = useState<any>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'bank' | 'tests' | 'reports'>('dashboard');
   const [saving, setSaving] = useState(false);
@@ -84,30 +82,10 @@ export default function PrincipalDashboard() {
   const [settings, setSettings] = useState({ collegeName: '', location: '' });
   const [status, setStatus] = useState<{type: 'success' | 'error', message: string} | null>(null);
   const [confirmDeleteTeacher, setConfirmDeleteTeacher] = useState<string | null>(null);
-  const [legacyAttachClassId, setLegacyAttachClassId] = useState<string | null>(null);
-  const [legacyAttaching, setLegacyAttaching] = useState(false);
 
   const getAttendanceDocId = (collegeId: string, date: string, studentId: string) => `${collegeId}_${date}_${studentId}`;
   const sanitizeLegacyDocId = (value?: string | null) => (value || '').toLowerCase().trim().replace(/[^a-zA-Z0-9]/g, '_');
   const dedupeById = <T extends { id: string }>(items: T[]) => Array.from(new Map(items.map((item) => [item.id, item])).values());
-  const dedupeByKey = <T extends { id: string; uid?: string }>(items: T[], keySelector: (item: T) => string) => {
-    const map = new Map<string, T>();
-    items.forEach((item) => {
-      const key = keySelector(item);
-      if (!key) return;
-      const existing = map.get(key);
-      if (!existing) {
-        map.set(key, item);
-        return;
-      }
-
-      // Prefer the record that already has a resolved auth uid when both exist.
-      if (!existing.uid && item.uid) {
-        map.set(key, item);
-      }
-    });
-    return Array.from(map.values());
-  };
   const teacherScopeIds = Array.from(
     new Set(
       teachers.flatMap((teacher: any) => [teacher.id, teacher.uid, sanitizeLegacyDocId(teacher.email)]).filter(
@@ -120,17 +98,6 @@ export default function PrincipalDashboard() {
     const message = error instanceof Error ? error.message.toLowerCase() : '';
     if (message.includes('missing or insufficient permissions')) {
       return "Attendance permissions are blocked in Firestore for this account.";
-    }
-    return fallback;
-  };
-
-  const getUserWriteErrorMessage = (error: unknown, fallback: string) => {
-    const message = error instanceof Error ? error.message.toLowerCase() : '';
-    if (message.includes('missing or insufficient permissions')) {
-      return "This account cannot update faculty records in Firestore right now.";
-    }
-    if (message.includes('already registered')) {
-      return error instanceof Error ? error.message : fallback;
     }
     return fallback;
   };
@@ -234,18 +201,16 @@ export default function PrincipalDashboard() {
           getDoc(doc(db, 'colleges', collegeId)),
           getDocs(query(collection(db, 'users'), where('collegeId', '==', collegeId), where('role', '==', 'teacher'))),
           getDocs(query(collection(db, 'users'), where('collegeId', '==', collegeId), where('role', '==', 'student'))),
-          getDocs(query(collection(db, 'classes'), where('collegeId', '==', collegeId))),
           getDocs(query(collection(db, 'tests'), where('collegeId', '==', collegeId))),
           getDocs(query(collection(db, 'submissions'), where('collegeId', '==', collegeId)))
         ];
 
-        const [cRes, teachersRes, studentsRes, classesRes, testsRes, subRes] = await Promise.allSettled(queries);
+        const [cRes, teachersRes, studentsRes, testsRes, subRes] = await Promise.allSettled(queries);
         if (cRes.status !== 'fulfilled') throw cRes.reason;
 
         const cSnap = cRes.value as any;
         const teachersSnap = (teachersRes.status === 'fulfilled' ? teachersRes.value : { docs: [] }) as any;
         const studentsSnap = (studentsRes.status === 'fulfilled' ? studentsRes.value : { docs: [] }) as any;
-        const classesSnap = (classesRes.status === 'fulfilled' ? classesRes.value : { docs: [] }) as any;
         const testsSnap = (testsRes.status === 'fulfilled' ? testsRes.value : { docs: [] }) as any;
         const allSubSnap = (subRes.status === 'fulfilled' ? subRes.value : { docs: [] }) as any;
         
@@ -254,14 +219,8 @@ export default function PrincipalDashboard() {
         setSettings({ collegeName: cData?.name || '', location: cData?.location || '' });
 
         // 1. Teachers
-        const teacherList = dedupeByKey(
-          teachersSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[],
-          (teacher: any) => (teacher.email || teacher.uid || teacher.id || '').toLowerCase()
-        );
+        const teacherList = teachersSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
         setTeachers(teacherList);
-
-        const classList = classesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
-        setClasses(classList);
         
         // 2. Students
         const studentList = studentsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
@@ -422,42 +381,53 @@ export default function PrincipalDashboard() {
   };
 
   const handleSaveTeacher = async () => {
-    if (!newTeacher.name || !newTeacher.email || !collegeData) {
-      setStatus({ type: 'error', message: "Teacher name and email are required before saving." });
-      return;
-    }
+    if (!newTeacher.name || !newTeacher.email || !collegeData) return;
     setSaving(true);
     setStatus(null);
     try {
        const cleanEmail = newTeacher.email.toLowerCase().trim();
        const teacherId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '_');
-       const targetTeacherDocId = editingTeacher?.id || teacherId;
        
        if (editingTeacher) {
-         const nextTeacherPayload = {
-           displayName: newTeacher.name,
-           officialName: newTeacher.name,
-           email: cleanEmail,
-           role: 'teacher',
-           collegeId: collegeData.id,
-           updatedAt: serverTimestamp()
-         };
-
-         await setDoc(doc(db, 'users', targetTeacherDocId), {
-           ...nextTeacherPayload,
-           createdAt: editingTeacher.createdAt || serverTimestamp(),
-         }, { merge: true });
-
-         if (editingTeacher.uid && editingTeacher.uid !== targetTeacherDocId) {
-           await setDoc(doc(db, 'users', editingTeacher.uid), {
-             ...nextTeacherPayload,
-             createdAt: editingTeacher.createdAt || serverTimestamp(),
-             uid: editingTeacher.uid
-           }, { merge: true });
+         // Check collision if email changed
+         if (cleanEmail !== editingTeacher.email) {
+            const exQ = query(collection(db, 'users'), where('email', '==', cleanEmail));
+            const exSnap = await getDocs(exQ);
+            if (!exSnap.empty) throw new Error("Email already registered in the faculty network.");
          }
 
-         setStatus({ type: 'success', message: "Faculty profile updated successfully." });
+         const isMigrated = !!editingTeacher.uid;
+         
+         if (isMigrated) {
+            await updateDoc(doc(db, 'users', editingTeacher.id), {
+              displayName: newTeacher.name,
+              officialName: newTeacher.name,
+              email: cleanEmail,
+              updatedAt: serverTimestamp()
+            });
+            setStatus({ type: 'success', message: "Faculty profile updated. Google Login sync maintained." });
+         } else {
+            await setDoc(doc(db, 'users', teacherId), {
+              displayName: newTeacher.name,
+              officialName: newTeacher.name,
+              email: cleanEmail,
+              role: 'teacher',
+              collegeId: collegeData.id,
+              createdAt: editingTeacher.createdAt || serverTimestamp(),
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+
+            if (editingTeacher.id !== teacherId) {
+               await deleteDoc(doc(db, 'users', editingTeacher.id));
+            }
+            setStatus({ type: 'success', message: "Faculty identity synchronized." });
+         }
        } else {
+         // Check collision
+         const exQ = query(collection(db, 'users'), where('email', '==', cleanEmail));
+         const exSnap = await getDocs(exQ);
+         if (!exSnap.empty) throw new Error("Email already registered in the faculty network.");
+
          await setDoc(doc(db, 'users', teacherId), {
            displayName: newTeacher.name,
            officialName: newTeacher.name,
@@ -475,7 +445,7 @@ export default function PrincipalDashboard() {
        fetchDashboardData();
     } catch (e: any) {
        console.error(e);
-       setStatus({ type: 'error', message: getUserWriteErrorMessage(e, "Teacher registration failed. Please try again.") });
+       setStatus({ type: 'error', message: e.message || "Credentialing failed. Integrity check rejected." });
     } finally {
        setSaving(false);
     }
@@ -499,154 +469,21 @@ export default function PrincipalDashboard() {
     setShowTeacherModal(true);
   };
 
-  const handleCreateTeacher = () => {
-    setEditingTeacher(null);
-    setNewTeacher({ name: '', email: '' });
-    setShowTeacherModal(true);
-  };
-
-  const handleEditClass = (classRoom: any) => {
-    setEditingClass(classRoom);
-    setNewClass({
-      name: classRoom.name || '',
-      teacherId: classRoom.teacherId || ''
-    });
-    setShowClassModal(true);
-  };
-
-  const handleCreateClassroom = () => {
-    setEditingClass(null);
-    setNewClass({ name: '', teacherId: '' });
-    setShowClassModal(true);
-  };
-
-  const commitBatchChunks = async (updates: Array<(batch: ReturnType<typeof writeBatch>) => void>, chunkSize = 300) => {
-    for (let index = 0; index < updates.length; index += chunkSize) {
-      const batch = writeBatch(db);
-      updates.slice(index, index + chunkSize).forEach((applyUpdate) => applyUpdate(batch));
-      await batch.commit();
-    }
-  };
-
-  const attachLegacyAssetsToClass = async (classId: string) => {
-    if (!collegeData?.id) return;
-    setLegacyAttaching(true);
-    setStatus(null);
-    try {
-      const collegeId = collegeData.id;
-      const [questionSnap, testSnap, studentSnap, attendanceSnap] = await Promise.all([
-        getDocs(query(collection(db, 'questions'), where('collegeId', '==', collegeId))),
-        getDocs(query(collection(db, 'tests'), where('collegeId', '==', collegeId))),
-        getDocs(query(collection(db, 'users'), where('collegeId', '==', collegeId), where('role', '==', 'student'))),
-        getDocs(query(collection(db, 'attendance'), where('collegeId', '==', collegeId))),
-      ]);
-
-      const updates: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
-
-      questionSnap.docs.forEach((questionDoc) => {
-        const question = questionDoc.data() as any;
-        if (!question.classId) {
-          updates.push((batch) => batch.update(doc(db, 'questions', questionDoc.id), { classId, updatedAt: serverTimestamp() }));
-        }
-      });
-
-      testSnap.docs.forEach((testDoc) => {
-        const test = testDoc.data() as any;
-        if (!test.classId) {
-          updates.push((batch) => batch.update(doc(db, 'tests', testDoc.id), { classId, updatedAt: serverTimestamp() }));
-        }
-      });
-
-      studentSnap.docs.forEach((studentDoc) => {
-        const student = studentDoc.data() as any;
-        if (!student.classId) {
-          updates.push((batch) => batch.update(doc(db, 'users', studentDoc.id), { classId, updatedAt: serverTimestamp() }));
-        }
-      });
-
-      attendanceSnap.docs.forEach((attendanceDoc) => {
-        const attendance = attendanceDoc.data() as any;
-        if (!attendance.classId) {
-          updates.push((batch) => batch.update(doc(db, 'attendance', attendanceDoc.id), { classId, updatedAt: serverTimestamp() }));
-        }
-      });
-
-      if (updates.length) {
-        await commitBatchChunks(updates);
-      }
-
-      setStatus({ type: 'success', message: "Legacy assets attached to the selected class." });
-      setLegacyAttachClassId(null);
-      fetchDashboardData();
-    } catch (e) {
-      console.error(e);
-      setStatus({ type: 'error', message: "Legacy attachment failed. Please try again." });
-    } finally {
-      setLegacyAttaching(false);
-    }
-  };
-
-  const handleSaveClass = async () => {
-    if (!newClass.name || !newClass.teacherId || !collegeData) {
-      setStatus({ type: 'error', message: "Class name and assigned teacher are required." });
-      return;
-    }
+  const handleCreateClass = async () => {
+    if (!newClass.name || !newClass.teacherId || !collegeData) return;
     setSaving(true);
     try {
-       const nextTeacherDoc = teachers.find((teacher: any) => teacher.id === newClass.teacherId || teacher.uid === newClass.teacherId);
-       let savedClassId = editingClass?.id || '';
-        if (editingClass) {
-          await updateDoc(doc(db, 'classes', editingClass.id), {
-            name: newClass.name,
-            teacherId: newClass.teacherId,
-            teacherUid: nextTeacherDoc?.uid || '',
-            teacherEmail: nextTeacherDoc?.email || '',
-            teacherName: nextTeacherDoc?.displayName || nextTeacherDoc?.officialName || '',
-            collegeId: collegeData.id,
-            updatedAt: serverTimestamp()
-          });
-          savedClassId = editingClass.id;
-        } else {
-          const classRef = await addDoc(collection(db, 'classes'), {
-            name: newClass.name,
-            teacherId: newClass.teacherId,
-            teacherUid: nextTeacherDoc?.uid || '',
-            teacherEmail: nextTeacherDoc?.email || '',
-            teacherName: nextTeacherDoc?.displayName || nextTeacherDoc?.officialName || '',
-            collegeId: collegeData.id,
-            createdAt: serverTimestamp()
-          });
-          savedClassId = classRef.id;
-        }
-
-        if (nextTeacherDoc) {
-          await setDoc(doc(db, 'users', nextTeacherDoc.id), { classId: savedClassId, updatedAt: serverTimestamp() }, { merge: true });
-          if (nextTeacherDoc.uid && nextTeacherDoc.uid !== nextTeacherDoc.id) {
-            await setDoc(doc(db, 'users', nextTeacherDoc.uid), { classId: savedClassId, updatedAt: serverTimestamp() }, { merge: true });
-          }
-       }
-
-       if (editingClass?.teacherId && editingClass.teacherId !== newClass.teacherId) {
-         const remainingClassForOldTeacher = classes.find((classRoom) => classRoom.id !== editingClass.id && classRoom.teacherId === editingClass.teacherId);
-         if (!remainingClassForOldTeacher) {
-           const oldTeacherDoc = teachers.find((teacher: any) => teacher.id === editingClass.teacherId || teacher.uid === editingClass.teacherId);
-           if (oldTeacherDoc) {
-             await setDoc(doc(db, 'users', oldTeacherDoc.id), { classId: '' }, { merge: true });
-             if (oldTeacherDoc.uid && oldTeacherDoc.uid !== oldTeacherDoc.id) {
-               await setDoc(doc(db, 'users', oldTeacherDoc.uid), { classId: '' }, { merge: true });
-             }
-           }
-         }
-       }
-
+       await addDoc(collection(db, 'classes'), {
+         name: newClass.name,
+         teacherId: newClass.teacherId,
+         collegeId: collegeData.id,
+         createdAt: serverTimestamp()
+       });
        setShowClassModal(false);
-       setEditingClass(null);
        setNewClass({ name: '', teacherId: '' });
-        setStatus({ type: 'success', message: editingClass ? "Classroom reassigned successfully." : "Classroom created successfully." });
        fetchDashboardData();
     } catch (e) {
        console.error(e);
-       setStatus({ type: 'error', message: "Classroom save failed. Please try again." });
     } finally {
        setSaving(false);
     }
@@ -971,7 +808,7 @@ export default function PrincipalDashboard() {
               <div className="flex justify-between items-center mb-10">
                 <h3 className="text-xl font-black uppercase tracking-tight text-slate-800">Faculty Roster</h3>
                 <button 
-                  onClick={handleCreateTeacher}
+                  onClick={() => setShowTeacherModal(true)}
                   className="text-[10px] font-black text-emerald-600 uppercase tracking-widest hover:underline px-4 py-2 bg-emerald-50 rounded-lg"
                 >
                   Register Teacher
@@ -1038,57 +875,6 @@ export default function PrincipalDashboard() {
 
             <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-slate-200/50">
               <div className="flex justify-between items-center mb-10">
-                <h3 className="text-xl font-black uppercase tracking-tight text-slate-800">Classroom Registry</h3>
-                <button
-                  onClick={() => {
-                    setEditingClass(null);
-                    setNewClass({ name: '', teacherId: '' });
-                    setShowClassModal(true);
-                  }}
-                  className="text-[10px] font-black text-indigo-600 uppercase tracking-widest hover:underline px-4 py-2 bg-indigo-50 rounded-lg"
-                >
-                  Add Classroom
-                </button>
-              </div>
-              <div className="space-y-4">
-                {classes.map((classRoom) => {
-                  const assignedTeacher = teachers.find((teacher: any) => teacher.id === classRoom.teacherId || teacher.uid === classRoom.teacherId);
-                  return (
-                    <div key={classRoom.id} className="p-5 bg-slate-50 rounded-3xl flex items-center justify-between gap-4">
-                      <div>
-                        <p className="font-black text-slate-800 uppercase text-sm tracking-tight">{classRoom.name}</p>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
-                          Teacher: {assignedTeacher?.displayName || 'Unassigned'}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setLegacyAttachClassId(classRoom.id)}
-                          className="px-3 py-2 rounded-xl bg-white border border-slate-200 text-[10px] font-black uppercase tracking-widest text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
-                        >
-                          Attach Legacy
-                        </button>
-                        <button
-                          onClick={() => handleEditClass(classRoom)}
-                          className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-[10px] font-black uppercase tracking-widest text-slate-600 hover:border-emerald-300 hover:text-emerald-600"
-                        >
-                          Edit
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-                {classes.length === 0 && (
-                  <div className="py-10 text-center text-slate-400 uppercase tracking-widest text-[10px] font-bold">
-                    No classrooms registered yet
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-slate-200/50">
-              <div className="flex justify-between items-center mb-10">
                 <h3 className="text-xl font-black uppercase tracking-tight text-slate-800">Live Response Feed</h3>
               </div>
               
@@ -1129,7 +915,7 @@ export default function PrincipalDashboard() {
                </div>
                <div className="space-y-4">
                   <button 
-                    onClick={handleCreateTeacher}
+                    onClick={() => setShowTeacherModal(true)}
                     className="w-full p-6 bg-white/5 hover:bg-white/10 rounded-3xl border border-white/10 flex items-center justify-between transition-all group"
                   >
                     <div className="flex items-center gap-4">
@@ -1139,7 +925,7 @@ export default function PrincipalDashboard() {
                     <ArrowRight size={16} className="text-white/20 group-hover:text-white transition-all transform group-hover:translate-x-1" />
                   </button>
                   <button 
-                    onClick={handleCreateClassroom}
+                    onClick={() => setShowClassModal(true)}
                     className="w-full p-6 bg-white/5 hover:bg-white/10 rounded-3xl border border-white/10 flex items-center justify-between transition-all group"
                   >
                     <div className="flex items-center gap-4">
@@ -1170,7 +956,7 @@ export default function PrincipalDashboard() {
       </>
     )}
 
-        {activeTab === 'bank' && <QuestionBank collegeIdOverride={profile?.collegeId} mode="principal" classOptions={classes} />}
+        {activeTab === 'bank' && <QuestionBank collegeIdOverride={profile?.collegeId} mode="principal" />}
         {activeTab === 'tests' && (
           <TestCreator
             collegeIdOverride={profile?.collegeId}
@@ -1244,44 +1030,23 @@ export default function PrincipalDashboard() {
 
         {showClassModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => {
-                setShowClassModal(false);
-                setEditingClass(null);
-              }}
-              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
-            />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowClassModal(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white w-full max-w-lg rounded-[3.5rem] p-12 relative shadow-2xl">
-              <h3 className="text-3xl font-black text-slate-900 uppercase tracking-tighter mb-8 italic text-center">
-                {editingClass ? 'Edit Classroom' : 'Classroom Initiation'}
-              </h3>
+              <h3 className="text-3xl font-black text-slate-900 uppercase tracking-tighter mb-8 italic text-center">Classroom Initiation</h3>
               <div className="space-y-6">
                 <div>
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Class Assignment Name</label>
-                  <input
-                    type="text"
-                    value={newClass.name}
-                    onChange={e => setNewClass({...newClass, name: e.target.value})}
-                    className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-emerald-600 rounded-2xl outline-none font-bold"
-                    placeholder="e.g. Mechanical 2nd Year"
-                  />
+                  <input type="text" value={newClass.name} onChange={e => setNewClass({...newClass, name: e.target.value})} className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-emerald-600 rounded-2xl outline-none font-bold" placeholder="e.g. Mechanical 2nd Year" />
                 </div>
                 <div>
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Assign Faculty Member</label>
-                  <select
-                    value={newClass.teacherId}
-                    onChange={e => setNewClass({...newClass, teacherId: e.target.value})}
-                    className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-emerald-600 rounded-2xl outline-none font-bold appearance-none"
-                  >
+                  <select value={newClass.teacherId} onChange={e => setNewClass({...newClass, teacherId: e.target.value})} className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-emerald-600 rounded-2xl outline-none font-bold appearance-none">
                     <option value="">Select Instructor...</option>
                     {teachers.map(t => <option key={t.id} value={t.id}>{t.displayName}</option>)}
                   </select>
                 </div>
-                <button onClick={handleSaveClass} disabled={saving} className="w-full py-6 bg-slate-900 text-white font-black rounded-3xl hover:bg-indigo-600 transition-all flex items-center justify-center gap-3">
-                  {saving ? <Loader2 className="animate-spin" /> : <School size={20} />} {editingClass ? 'SAVE CLASSROOM' : 'DEPLOY CLASSROOM'}
+                <button onClick={handleCreateClass} disabled={saving} className="w-full py-6 bg-slate-900 text-white font-black rounded-3xl hover:bg-indigo-600 transition-all flex items-center justify-center gap-3">
+                  {saving ? <Loader2 className="animate-spin" /> : <School size={20} />} DEPLOY CLASSROOM
                 </button>
               </div>
             </motion.div>
@@ -1326,46 +1091,6 @@ export default function PrincipalDashboard() {
                </div>
              </motion.div>
            </div>
-        )}
-
-        {legacyAttachClassId && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-6">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setLegacyAttachClassId(null)}
-              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
-            />
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white w-full max-w-md rounded-[3rem] p-10 relative shadow-2xl"
-            >
-              <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight mb-2">Attach Legacy Assets</h3>
-              <p className="text-[11px] text-slate-500 font-bold uppercase tracking-widest leading-relaxed mb-8">
-                This will attach any unassigned (no class) questions, tests, students, and attendance in this college to the selected class.
-              </p>
-              <div className="grid grid-cols-2 gap-4">
-                <button
-                  type="button"
-                  onClick={() => setLegacyAttachClassId(null)}
-                  className="py-4 px-6 bg-slate-50 text-slate-400 font-black rounded-2xl text-[10px] uppercase tracking-widest hover:bg-slate-100 transition-all border border-slate-100"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => attachLegacyAssetsToClass(legacyAttachClassId)}
-                  disabled={legacyAttaching}
-                  className="py-4 px-6 bg-indigo-600 text-white font-black rounded-2xl text-[10px] uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-60"
-                >
-                  {legacyAttaching ? <Loader2 size={14} className="animate-spin" /> : 'Attach'}
-                </button>
-              </div>
-            </motion.div>
-          </div>
         )}
       </AnimatePresence>
     </div>

@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Routes, Route, NavLink, useLocation } from 'react-router-dom';
+import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import { auth, db } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
 import { motion } from 'framer-motion';
 import { 
   LayoutDashboard, 
@@ -25,16 +25,12 @@ import TestCreator from './teacher/TestCreator';
 import TeacherReports from './teacher/Reports';
 import StudentManagement from './teacher/StudentManagement';
 import { useAuth } from '../context/AuthContext';
-import { doesClassBelongToTeacher, getTeacherIdentityCandidates } from '../lib/classAccess';
 
 export default function TeacherDashboard() {
   const location = useLocation();
   const { profile } = useAuth();
   const [stats, setStats] = useState({ questions: 0, tests: 0, students: 0 });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [teacherClasses, setTeacherClasses] = useState<any[]>([]);
-  const [activeClassId, setActiveClassId] = useState<string>('');
-  const [classLoading, setClassLoading] = useState(false);
 
   const navItems = [
     { name: 'Overview', path: '/teacher', icon: LayoutDashboard },
@@ -47,45 +43,6 @@ export default function TeacherDashboard() {
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
-
-  useEffect(() => {
-    const collegeId = profile?.collegeId;
-    if (!collegeId) {
-      setTeacherClasses([]);
-      setActiveClassId('');
-      return;
-    }
-
-    setClassLoading(true);
-    const identities = getTeacherIdentityCandidates(auth.currentUser, profile);
-    const unsubscribe = onSnapshot(
-      query(collection(db, 'classes'), where('collegeId', '==', collegeId)),
-      (snapshot) => {
-        const classes = snapshot.docs.map((classDoc) => ({ id: classDoc.id, ...classDoc.data() })) as any[];
-        const assigned = classes.filter((classRoom) => doesClassBelongToTeacher(classRoom, identities));
-        setTeacherClasses(assigned);
-        setActiveClassId((current) => {
-          const stored = localStorage.getItem('teacher.activeClassId') || '';
-          if (current && assigned.some((c) => c.id === current)) return current;
-          if (stored && assigned.some((c) => c.id === stored)) return stored;
-          return assigned[0]?.id || '';
-        });
-        setClassLoading(false);
-      },
-      (error) => {
-        console.error(error);
-        setClassLoading(false);
-      }
-    );
-
-    return () => unsubscribe();
-  }, [profile?.collegeId, profile?.classId, profile?.id, profile?.email, auth.currentUser?.uid, auth.currentUser?.email]);
-
-  useEffect(() => {
-    if (activeClassId) {
-      localStorage.setItem('teacher.activeClassId', activeClassId);
-    }
-  }, [activeClassId]);
 
   return (
     <div className="flex min-h-screen bg-[var(--bg)] text-[var(--text-main)] font-sans">
@@ -103,19 +60,18 @@ export default function TeacherDashboard() {
             const isActive = location.pathname === item.path;
             const PathIcon = item.icon;
             return (
-              <NavLink
+              <Link
                 key={item.path}
                 to={item.path}
-                end={item.path === '/teacher'}
-                className={({ isActive: navIsActive }) => `flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
-                  navIsActive || isActive
-                    ? 'bg-[var(--primary)] text-white shadow-xl shadow-indigo-100'
-                    : 'text-[var(--text-sub)] hover:bg-[var(--bg)] hover:text-[var(--text-main)]'
+                className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
+                  isActive 
+                  ? 'bg-[var(--primary)] text-white shadow-xl shadow-indigo-100' 
+                  : 'text-[var(--text-sub)] hover:bg-[var(--bg)] hover:text-[var(--text-main)]'
                 }`}
               >
                 <PathIcon size={18} />
                 {item.name}
-              </NavLink>
+              </Link>
             );
           })}
         </nav>
@@ -163,43 +119,22 @@ export default function TeacherDashboard() {
                 const isActive = location.pathname === item.path;
                 const PathIcon = item.icon;
                 return (
-                  <NavLink
+                  <Link
                     key={item.path}
                     to={item.path}
-                    end={item.path === '/teacher'}
-                    onClick={() => setMobileMenuOpen(false)}
-                    className={({ isActive: navIsActive }) => `flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
-                      navIsActive || isActive
+                    className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
+                      isActive
                         ? 'bg-[var(--primary)] text-white shadow-xl shadow-indigo-100'
                         : 'text-[var(--text-sub)] hover:bg-[var(--bg)] hover:text-[var(--text-main)]'
                     }`}
                   >
                     <PathIcon size={18} />
                     {item.name}
-                  </NavLink>
+                  </Link>
                 );
               })}
             </nav>
             <div className="p-5 border-t border-[var(--border)] space-y-3">
-              <div className="rounded-2xl border border-[var(--border)] bg-white p-4">
-                <p className="text-[10px] font-black uppercase tracking-widest text-[var(--text-sub)]">Class</p>
-                <select
-                  value={activeClassId}
-                  onChange={(e) => setActiveClassId(e.target.value)}
-                  disabled={classLoading || teacherClasses.length === 0}
-                  className="mt-2 w-full h-10 px-3 rounded-xl border border-[var(--border)] bg-white text-xs font-bold text-[var(--text-main)]"
-                >
-                  {teacherClasses.length === 0 ? (
-                    <option value="">No class assigned</option>
-                  ) : (
-                    teacherClasses.map((classRoom) => (
-                      <option key={classRoom.id} value={classRoom.id}>
-                        {classRoom.name}
-                      </option>
-                    ))
-                  )}
-                </select>
-              </div>
               <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-4">
                 <p className="text-xs font-black uppercase tracking-widest text-[var(--text-sub)]">Signed in as</p>
                 <p className="text-sm font-extrabold text-[var(--text-main)] mt-1">{profile?.displayName || auth.currentUser?.displayName || 'Teacher'}</p>
@@ -231,25 +166,6 @@ export default function TeacherDashboard() {
             <h2 className="text-lg font-extrabold text-[var(--text-main)] capitalize">
               {location.pathname.split('/').pop()?.replace('-', ' ') || 'Overview'}
             </h2>
-            <div className="hidden md:flex items-center gap-2 ml-4">
-              <span className="text-[10px] font-black uppercase tracking-widest text-[var(--text-sub)]">Class</span>
-              <select
-                value={activeClassId}
-                onChange={(e) => setActiveClassId(e.target.value)}
-                disabled={classLoading || teacherClasses.length === 0}
-                className="h-9 px-3 rounded-xl border border-[var(--border)] bg-white text-xs font-bold text-[var(--text-main)]"
-              >
-                {teacherClasses.length === 0 ? (
-                  <option value="">No class assigned</option>
-                ) : (
-                  teacherClasses.map((classRoom) => (
-                    <option key={classRoom.id} value={classRoom.id}>
-                      {classRoom.name}
-                    </option>
-                  ))
-                )}
-              </select>
-            </div>
           </div>
           <div className="flex items-center gap-3 md:gap-4">
             <div className="badge hidden sm:block">Teacher Access</div>
@@ -266,35 +182,13 @@ export default function TeacherDashboard() {
           </div>
         </header>
 
-        <div className="md:hidden px-4 pt-4">
-          <div className="rounded-2xl border border-[var(--border)] bg-white p-3 shadow-sm">
-            <p className="text-[10px] font-black uppercase tracking-widest text-[var(--text-sub)]">Active Class</p>
-            <select
-              value={activeClassId}
-              onChange={(e) => setActiveClassId(e.target.value)}
-              disabled={classLoading || teacherClasses.length === 0}
-              className="mt-2 w-full h-10 px-3 rounded-xl border border-[var(--border)] bg-white text-xs font-bold text-[var(--text-main)]"
-            >
-              {teacherClasses.length === 0 ? (
-                <option value="">No class assigned</option>
-              ) : (
-                teacherClasses.map((classRoom) => (
-                  <option key={classRoom.id} value={classRoom.id}>
-                    {classRoom.name}
-                  </option>
-                ))
-              )}
-            </select>
-          </div>
-        </div>
-
         <div className="p-6 lg:p-8 max-w-7xl mx-auto">
-          <Routes location={location} key={`${location.pathname}-${activeClassId || 'none'}`}>
-            <Route index element={<TeacherOverview key={`overview-${activeClassId || 'none'}`} classIdOverride={activeClassId} />} />
-            <Route path="questions" element={<QuestionBank key={`questions-${activeClassId || 'none'}`} classIdOverride={activeClassId} />} />
-            <Route path="create-test" element={<TestCreator key={`tests-${activeClassId || 'none'}`} classIdOverride={activeClassId} />} />
-            <Route path="reports" element={<TeacherReports key={`reports-${activeClassId || 'none'}`} classIdOverride={activeClassId} />} />
-            <Route path="students" element={<StudentManagement key={`students-${activeClassId || 'none'}`} classIdOverride={activeClassId} />} />
+          <Routes>
+            <Route index element={<TeacherOverview />} />
+            <Route path="questions" element={<QuestionBank />} />
+            <Route path="create-test" element={<TestCreator />} />
+            <Route path="reports" element={<TeacherReports />} />
+            <Route path="students" element={<StudentManagement />} />
           </Routes>
         </div>
       </main>
