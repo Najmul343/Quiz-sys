@@ -50,6 +50,8 @@ export default function StudentDashboard() {
   const [progress, setProgress] = useState<Record<string, any>>({});
   const [growthData, setGrowthData] = useState<any[]>([]);
   const [officialName, setOfficialName] = useState("");
+  const [studentClassId, setStudentClassId] = useState("");
+  const [studentClassName, setStudentClassName] = useState("");
 
   useEffect(() => {
     fetchData();
@@ -61,8 +63,17 @@ export default function StudentDashboard() {
       const userData = userDoc.data();
       setOfficialName(userData?.officialName || userData?.displayName || auth.currentUser?.displayName || "");
       const collegeId = userData?.collegeId;
+      const classId = userData?.classId || '';
+      setStudentClassId(classId);
 
       if (!collegeId) return;
+
+      if (classId) {
+        const classDoc = await getDoc(doc(db, 'classes', classId));
+        if (classDoc.exists()) {
+          setStudentClassName((classDoc.data() as any).name || '');
+        }
+      }
 
       // 1 & 2 Parallelized for speed
       const [testSnap, subSnap] = await Promise.all([
@@ -79,7 +90,9 @@ export default function StudentDashboard() {
         ))
       ]);
 
-      const testList = testSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+      const testList = (testSnap.docs
+        .map(doc => ({ id: doc.id, ...doc.data() })) as any[])
+        .filter((test: any) => !classId || test.classId === classId);
       setTests(testList);
 
       const subList = subSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
@@ -160,6 +173,9 @@ export default function StudentDashboard() {
           <div>
             <div className="badge mb-3">{activeTab === 'live' ? 'Live Portal' : 'Academic Archive'}</div>
             <p className="text-[10px] font-black text-[var(--primary)] uppercase tracking-widest mb-1">{officialName}</p>
+            {studentClassName && (
+              <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-2">{studentClassName}</p>
+            )}
             <h1 className="text-4xl font-black text-[var(--text-main)] tracking-tight mb-2 uppercase">
               {activeTab === 'live' ? 'Assessment Hub' : 'Result Ledger'}
             </h1>

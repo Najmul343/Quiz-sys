@@ -25,7 +25,11 @@ import {
 import { cn } from '../../lib/utils';
 import { useAuth } from '../../context/AuthContext';
 
-export default function StudentManagement() {
+type StudentManagementProps = {
+  classIdOverride?: string;
+};
+
+export default function StudentManagement({ classIdOverride }: StudentManagementProps) {
   const { profile } = useAuth();
   const todayLocal = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   const [students, setStudents] = useState<any[]>([]);
@@ -110,9 +114,9 @@ export default function StudentManagement() {
   useEffect(() => {
     if (profile?.collegeId) {
       setCurrentCollegeId(profile.collegeId);
-      fetchStudents(profile.collegeId);
+      fetchStudents(profile.collegeId, classIdOverride);
     }
-  }, [profile]);
+  }, [profile, classIdOverride]);
 
   useEffect(() => {
     if (currentCollegeId && students.length) {
@@ -151,9 +155,10 @@ export default function StudentManagement() {
     }
   };
 
-  const fetchStudents = async (collegeIdArg?: string) => {
+  const fetchStudents = async (collegeIdArg?: string, classIdArg?: string) => {
     try {
       const collegeId = collegeIdArg || profile?.collegeId;
+      const activeClassId = classIdArg || classIdOverride;
 
       if (!collegeId) return;
       setCurrentCollegeId(collegeId);
@@ -164,7 +169,9 @@ export default function StudentManagement() {
         where('collegeId', '==', collegeId)
       );
       const snap = await getDocs(q);
-      const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const list = snap.docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .filter((student: any) => !activeClassId || student.classId === activeClassId);
       
       // Sort students roll no wise
       list.sort((a: any, b: any) => {
@@ -234,6 +241,7 @@ export default function StudentManagement() {
         email: cleanEmail,
         rollNo: newStudent.rollNo,
         trade: newStudent.trade,
+        classId: classIdOverride || '',
         role: 'student',
         collegeId,
         addedBy: auth.currentUser?.uid,
@@ -285,6 +293,7 @@ export default function StudentManagement() {
           email: cleanEmail,
           rollNo: editingStudent.rollNo,
           trade: editingStudent.trade,
+          classId: editingStudent.classId || classIdOverride || '',
           updatedAt: serverTimestamp()
         });
       } else {
@@ -295,6 +304,7 @@ export default function StudentManagement() {
           email: cleanEmail,
           rollNo: editingStudent.rollNo,
           trade: editingStudent.trade,
+          classId: editingStudent.classId || classIdOverride || '',
           role: 'student',
           collegeId,
           addedBy: editingStudent.addedBy || auth.currentUser?.uid,

@@ -21,17 +21,20 @@ import { cn } from '../../lib/utils';
 import { fetchAccessibleQuestions } from '../../lib/questionAccess';
 import MathRenderer from '../../components/MathRenderer';
 import { useAuth } from '../../context/AuthContext';
+import { resolveTeacherAssignedClass, sanitizeLegacyDocId } from '../../lib/classAccess';
 
 type TestCreatorProps = {
   collegeIdOverride?: string;
   viewerMode?: 'teacher' | 'college';
   teacherIdsOverride?: string[];
+  classIdOverride?: string;
 };
 
 export default function TestCreator({
   collegeIdOverride,
   viewerMode = 'teacher',
   teacherIdsOverride,
+  classIdOverride,
 }: TestCreatorProps) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -43,6 +46,7 @@ export default function TestCreator({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [assignedClassId, setAssignedClassId] = useState<string | null>(null);
 
   // Test settings
   const [title, setTitle] = useState("");
@@ -60,7 +64,6 @@ export default function TestCreator({
   const [chapterFilter, setChapterFilter] = useState("all");
   const [showChapterLabels, setShowChapterLabels] = useState(true);
 
-  const sanitizeLegacyDocId = (value?: string | null) => (value || '').toLowerCase().trim().replace(/[^a-zA-Z0-9]/g, '_');
   const dedupeById = <T extends { id: string }>(items: T[]) => Array.from(new Map(items.map((item) => [item.id, item])).values());
 
   useEffect(() => {
@@ -71,7 +74,7 @@ export default function TestCreator({
       }
     };
     init();
-  }, [editId, profile, collegeIdOverride, viewerMode]);
+  }, [editId, profile, collegeIdOverride, viewerMode, classIdOverride]);
 
   const loadExistingTest = async (id: string) => {
     try {
@@ -99,6 +102,17 @@ export default function TestCreator({
       const collegeId = collegeIdArg || collegeIdOverride || profile?.collegeId;
 
       if (!collegeId) return;
+      const activeClassId = viewerMode === 'teacher'
+        ? classIdOverride || assignedClassId || (await resolveTeacherAssignedClass(db, {
+            collegeId,
+            user: auth.currentUser,
+            profile,
+          }))?.id || null
+        : classIdOverride || null;
+
+      if (viewerMode === 'teacher') {
+        setAssignedClassId(activeClassId);
+      }
 
       const fetchedQuestions = await fetchAccessibleQuestions(db, collegeId);
       setQuestions(fetchedQuestions);
@@ -138,7 +152,9 @@ export default function TestCreator({
         where('teacherId', '==', auth.currentUser?.uid)
       );
       const testSnap = await getDocs(testsQuery);
-      const tests = testSnap.docs.map(testDoc => ({ id: testDoc.id, ...testDoc.data() }));
+      const tests = testSnap.docs
+        .map(testDoc => ({ id: testDoc.id, ...testDoc.data() }))
+        .filter((test: any) => !activeClassId || test.classId === activeClassId);
       setTeacherTests([...tests].sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
     } catch (e) {
       console.error(e);
@@ -161,6 +177,7 @@ export default function TestCreator({
         isPractice,
         visible: isVisible,
         collegeId,
+        classId: viewerMode === 'teacher' ? (classIdOverride || assignedClassId || profile?.classId || null) : (classIdOverride || null),
         settings: { 
           forceFullscreen, 
           shuffleQuestions: shuffleQ, 

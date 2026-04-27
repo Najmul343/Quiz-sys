@@ -42,17 +42,20 @@ import {
   Cell
 } from 'recharts';
 import MathRenderer from '../../components/MathRenderer';
+import { resolveTeacherAssignedClass } from '../../lib/classAccess';
 
 type TeacherReportsProps = {
   collegeIdOverride?: string;
   scopeMode?: 'teacher' | 'college';
   teacherIdsOverride?: string[];
+  classIdOverride?: string;
 };
 
 export default function TeacherReports({
   collegeIdOverride,
   scopeMode = 'teacher',
   teacherIdsOverride,
+  classIdOverride,
 }: TeacherReportsProps) {
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [tests, setTests] = useState<any[]>([]);
@@ -66,18 +69,29 @@ export default function TeacherReports({
   const [studentSearch, setStudentSearch] = useState('');
   const [studentDirectory, setStudentDirectory] = useState<Record<string, any>>({});
   const [attendanceMonth, setAttendanceMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [assignedClassId, setAssignedClassId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
-  }, [collegeIdOverride, scopeMode, teacherIdsOverride]);
+  }, [collegeIdOverride, scopeMode, teacherIdsOverride, classIdOverride]);
 
   const fetchData = async () => {
     try {
       const userDoc = await getDoc(doc(db, 'users', auth.currentUser?.uid || ''));
       const userData = userDoc.data();
       const collegeId = collegeIdOverride || userData?.collegeId;
+      const activeClassId = scopeMode === 'teacher'
+        ? classIdOverride || assignedClassId || (await resolveTeacherAssignedClass(db, {
+            collegeId,
+            user: auth.currentUser,
+            profile: userData || null,
+          }))?.id || null
+        : classIdOverride || null;
 
       if (!collegeId) return;
+      if (scopeMode === 'teacher') {
+        setAssignedClassId(activeClassId);
+      }
 
       const teacherFilterIds = teacherIdsOverride?.length ? teacherIdsOverride : [auth.currentUser?.uid].filter(Boolean) as string[];
       const testQuery = scopeMode === 'college'
@@ -100,9 +114,9 @@ export default function TeacherReports({
 
       const testList = testSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       const filteredTests = scopeMode === 'college'
-        ? testList
+        ? testList.filter((test: any) => !activeClassId || test.classId === activeClassId)
         : teacherFilterIds.length
-          ? testList.filter((test: any) => teacherFilterIds.includes(test.teacherId) || teacherFilterIds.includes(test.uid))
+          ? testList.filter((test: any) => (teacherFilterIds.includes(test.teacherId) || teacherFilterIds.includes(test.uid)) && (!activeClassId || test.classId === activeClassId))
           : testList;
       setTests(filteredTests);
 
@@ -112,11 +126,18 @@ export default function TeacherReports({
 
       const studentMap: Record<string, any> = {};
       studentSnap.docs.forEach((studentDoc) => {
-        studentMap[studentDoc.id] = { id: studentDoc.id, ...studentDoc.data() };
+        const student = { id: studentDoc.id, ...studentDoc.data() } as any;
+        if (!activeClassId || student.classId === activeClassId) {
+          studentMap[studentDoc.id] = student;
+        }
       });
       setStudentDirectory(studentMap);
 
-      setAttendanceRecords(attendanceSnap.docs.map((attendanceDoc) => ({ id: attendanceDoc.id, ...attendanceDoc.data() })));
+      setAttendanceRecords(
+        attendanceSnap.docs
+          .map((attendanceDoc) => ({ id: attendanceDoc.id, ...attendanceDoc.data() }))
+          .filter((attendance: any) => !activeClassId || attendance.classId === activeClassId || studentMap[attendance.studentId])
+      );
       
       // Questions are now fetched on-demand in handleViewSubmission
     } catch (e) {

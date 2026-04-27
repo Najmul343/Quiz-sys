@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Routes, Route, Link, useLocation } from 'react-router-dom';
+import { Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import { auth, db } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
-import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { motion } from 'framer-motion';
 import { 
   LayoutDashboard, 
@@ -25,16 +25,17 @@ import TestCreator from './teacher/TestCreator';
 import TeacherReports from './teacher/Reports';
 import StudentManagement from './teacher/StudentManagement';
 import { useAuth } from '../context/AuthContext';
+import { doesClassBelongToTeacher, getTeacherIdentityCandidates } from '../lib/classAccess';
 
 export default function TeacherDashboard() {
   const location = useLocation();
   const { profile } = useAuth();
-  const [stats, setStats] = useState({ questions: 0, tests: 0, students: 0 });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [assignedClass, setAssignedClass] = useState<any>(null);
+  const [classLoading, setClassLoading] = useState(true);
 
   const navItems = [
     { name: 'Overview', path: '/teacher', icon: LayoutDashboard },
-    { name: 'Question Bank', path: '/teacher/questions', icon: BookOpen },
     { name: 'Create Test', path: '/teacher/create-test', icon: FilePlus },
     { name: 'Reports & Analytics', path: '/teacher/reports', icon: BarChart3 },
     { name: 'Student Management', path: '/teacher/students', icon: Users },
@@ -43,6 +44,33 @@ export default function TeacherDashboard() {
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    const collegeId = profile?.collegeId;
+    if (!collegeId) {
+      setAssignedClass(null);
+      setClassLoading(false);
+      return;
+    }
+
+    setClassLoading(true);
+    const identities = getTeacherIdentityCandidates(auth.currentUser, profile);
+    const unsubscribe = onSnapshot(
+      query(collection(db, 'classes'), where('collegeId', '==', collegeId)),
+      (snapshot) => {
+        const classes = snapshot.docs.map((classDoc) => ({ id: classDoc.id, ...classDoc.data() })) as any[];
+        const matchedClass = classes.find((classRoom) => doesClassBelongToTeacher(classRoom, identities)) || null;
+        setAssignedClass(matchedClass);
+        setClassLoading(false);
+      },
+      (error) => {
+        console.error(error);
+        setClassLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [profile?.collegeId, profile?.classId, profile?.id, profile?.email, auth.currentUser?.uid, auth.currentUser?.email]);
 
   return (
     <div className="flex min-h-screen bg-[var(--bg)] text-[var(--text-main)] font-sans">
@@ -60,18 +88,19 @@ export default function TeacherDashboard() {
             const isActive = location.pathname === item.path;
             const PathIcon = item.icon;
             return (
-              <Link
+              <NavLink
                 key={item.path}
                 to={item.path}
-                className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
-                  isActive 
-                  ? 'bg-[var(--primary)] text-white shadow-xl shadow-indigo-100' 
-                  : 'text-[var(--text-sub)] hover:bg-[var(--bg)] hover:text-[var(--text-main)]'
+                end={item.path === '/teacher'}
+                className={({ isActive: navIsActive }) => `flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
+                  navIsActive || isActive
+                    ? 'bg-[var(--primary)] text-white shadow-xl shadow-indigo-100'
+                    : 'text-[var(--text-sub)] hover:bg-[var(--bg)] hover:text-[var(--text-main)]'
                 }`}
               >
                 <PathIcon size={18} />
                 {item.name}
-              </Link>
+              </NavLink>
             );
           })}
         </nav>
@@ -119,22 +148,30 @@ export default function TeacherDashboard() {
                 const isActive = location.pathname === item.path;
                 const PathIcon = item.icon;
                 return (
-                  <Link
+                  <NavLink
                     key={item.path}
                     to={item.path}
-                    className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
-                      isActive
+                    end={item.path === '/teacher'}
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={({ isActive: navIsActive }) => `flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
+                      navIsActive || isActive
                         ? 'bg-[var(--primary)] text-white shadow-xl shadow-indigo-100'
                         : 'text-[var(--text-sub)] hover:bg-[var(--bg)] hover:text-[var(--text-main)]'
                     }`}
                   >
                     <PathIcon size={18} />
                     {item.name}
-                  </Link>
+                  </NavLink>
                 );
               })}
             </nav>
             <div className="p-5 border-t border-[var(--border)] space-y-3">
+              <div className="rounded-2xl border border-[var(--border)] bg-white p-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-[var(--text-sub)]">Assigned Class</p>
+                <p className="mt-1 text-sm font-extrabold text-[var(--text-main)]">
+                  {classLoading ? 'Loading...' : assignedClass?.name || 'No class assigned'}
+                </p>
+              </div>
               <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-4">
                 <p className="text-xs font-black uppercase tracking-widest text-[var(--text-sub)]">Signed in as</p>
                 <p className="text-sm font-extrabold text-[var(--text-main)] mt-1">{profile?.displayName || auth.currentUser?.displayName || 'Teacher'}</p>
@@ -166,6 +203,12 @@ export default function TeacherDashboard() {
             <h2 className="text-lg font-extrabold text-[var(--text-main)] capitalize">
               {location.pathname.split('/').pop()?.replace('-', ' ') || 'Overview'}
             </h2>
+            <div className="hidden md:flex items-center gap-3 ml-4 px-3 py-2 rounded-xl bg-slate-50 border border-slate-100">
+              <span className="text-[10px] font-black uppercase tracking-widest text-[var(--text-sub)]">Class</span>
+              <span className="text-xs font-black text-[var(--text-main)]">
+                {classLoading ? 'Loading...' : assignedClass?.name || 'Unassigned'}
+              </span>
+            </div>
           </div>
           <div className="flex items-center gap-3 md:gap-4">
             <div className="badge hidden sm:block">Teacher Access</div>
@@ -183,12 +226,11 @@ export default function TeacherDashboard() {
         </header>
 
         <div className="p-6 lg:p-8 max-w-7xl mx-auto">
-          <Routes>
-            <Route index element={<TeacherOverview />} />
-            <Route path="questions" element={<QuestionBank />} />
-            <Route path="create-test" element={<TestCreator />} />
-            <Route path="reports" element={<TeacherReports />} />
-            <Route path="students" element={<StudentManagement />} />
+          <Routes location={location} key={`${location.pathname}-${assignedClass?.id || 'none'}`}>
+            <Route index element={<TeacherOverview classIdOverride={assignedClass?.id || ''} />} />
+            <Route path="create-test" element={<TestCreator classIdOverride={assignedClass?.id || ''} />} />
+            <Route path="reports" element={<TeacherReports classIdOverride={assignedClass?.id || ''} />} />
+            <Route path="students" element={<StudentManagement classIdOverride={assignedClass?.id || ''} />} />
           </Routes>
         </div>
       </main>

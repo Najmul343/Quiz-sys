@@ -7,7 +7,11 @@ import { cn } from '../../lib/utils';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 
-export default function TeacherOverview() {
+type TeacherOverviewProps = {
+  classIdOverride?: string;
+};
+
+export default function TeacherOverview({ classIdOverride }: TeacherOverviewProps) {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const [stats, setStats] = useState({
@@ -22,13 +26,14 @@ export default function TeacherOverview() {
 
   useEffect(() => {
     if (profile?.collegeId) {
-      fetchStats(profile.collegeId);
+      fetchStats(profile.collegeId, classIdOverride);
     }
-  }, [profile]);
+  }, [profile, classIdOverride]);
 
-  const fetchStats = async (collegeIdArg?: string) => {
+  const fetchStats = async (collegeIdArg?: string, classIdArg?: string) => {
     try {
       const collegeId = collegeIdArg || profile?.collegeId;
+      const classId = classIdArg || classIdOverride;
 
       if (!collegeId) return;
 
@@ -36,13 +41,18 @@ export default function TeacherOverview() {
       const tSnap = await getDocs(query(collection(db, 'tests'), where('collegeId', '==', collegeId)));
       const sSnap = await getDocs(query(collection(db, 'users'), where('role', '==', 'student'), where('collegeId', '==', collegeId)));
 
-      const tests = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const tests = tSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter((test: any) => !classId || test.classId === classId);
+      const students = sSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter((student: any) => !classId || student.classId === classId);
 
       setStats({
         totalQuestions: qSnap.size,
         activeTests: tests.filter((d: any) => d.status === 'active').length,
         draftTests: tests.filter((d: any) => d.status === 'draft').length,
-        totalStudents: sSnap.size,
+        totalStudents: students.length,
         avgPassingRate: 78
       });
       setRecentTests(tests.sort((a: any, b: any) => b.createdAt?.seconds - a.createdAt?.seconds).slice(0, 3));
@@ -139,7 +149,7 @@ export default function TeacherOverview() {
           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6">Operations Matrix</p>
           <div className="space-y-4">
             <button 
-              onClick={() => navigate('/teacher/questions')}
+              onClick={() => navigate('/teacher/create-test')}
               className="w-full group flex items-center justify-between p-5 bg-slate-50 border border-slate-100 rounded-[1.5rem] transition-all hover:bg-white hover:border-indigo-400 hover:shadow-xl hover:shadow-indigo-50"
             >
               <div className="flex items-center gap-4">
@@ -147,8 +157,8 @@ export default function TeacherOverview() {
                   <BrainCircuit size={24} />
                 </div>
                 <div className="text-left">
-                  <p className="font-bold text-slate-800 text-sm">Synthetic Intelligence</p>
-                  <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-0.5 italic">MCQ Generation Engine</p>
+                  <p className="font-bold text-slate-800 text-sm">Build Class Test</p>
+                  <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-0.5 italic">Use the assigned bank inside test creation</p>
                 </div>
               </div>
               <ArrowRight size={20} className="text-slate-300 group-hover:text-indigo-600 group-hover:translate-x-1 transition-all" />

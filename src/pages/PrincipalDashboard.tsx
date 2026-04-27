@@ -5,13 +5,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Users, 
   School, 
-  BookOpen, 
   TrendingUp, 
   ArrowRight, 
   Plus, 
-  Search, 
   Loader2,
-  Filter,
   BarChart3,
   LogOut,
   Settings,
@@ -44,7 +41,6 @@ import {
   Cell
 } from 'recharts';
 
-import QuestionBank from './teacher/QuestionBank';
 import TestCreator from './teacher/TestCreator';
 import TeacherReports from './teacher/Reports';
 
@@ -63,13 +59,15 @@ export default function PrincipalDashboard() {
   const [showTeacherModal, setShowTeacherModal] = useState(false);
   const [showClassModal, setShowClassModal] = useState(false);
   const [teachers, setTeachers] = useState<any[]>([]);
+  const [classes, setClasses] = useState<any[]>([]);
   const [students, setStudents] = useState<any[]>([]);
   const [recentSubmissions, setRecentSubmissions] = useState<any[]>([]);
   const [newTeacher, setNewTeacher] = useState({ name: '', email: '' });
   const [editingTeacher, setEditingTeacher] = useState<any>(null);
   const [newClass, setNewClass] = useState({ name: '', teacherId: '' });
   const [showSettings, setShowSettings] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'bank' | 'tests' | 'reports'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'tests' | 'reports'>('dashboard');
+  const [selectedClassId, setSelectedClassId] = useState('');
   const [saving, setSaving] = useState(false);
   const [performanceData, setPerformanceData] = useState<any[]>([]);
   const [teacherMetrics, setTeacherMetrics] = useState<Record<string, any>>({});
@@ -111,9 +109,9 @@ export default function PrincipalDashboard() {
 
   useEffect(() => {
     if (profile?.collegeId) {
-      fetchDashboardData(profile.collegeId);
+      fetchDashboardData(profile.collegeId, selectedClassId);
     }
-  }, [profile]);
+  }, [profile, selectedClassId]);
 
   useEffect(() => {
     if (profile?.collegeId && students.length) {
@@ -190,10 +188,11 @@ export default function PrincipalDashboard() {
     }
   };
 
-  const fetchDashboardData = async (collegeIdArg?: string) => {
+  const fetchDashboardData = async (collegeIdArg?: string, classIdArg?: string) => {
     try {
       setLoading(true);
       const collegeId = collegeIdArg || profile?.collegeId;
+      const selectedClass = classIdArg || '';
       
       if (collegeId) {
         // Parallelize independent queries
@@ -201,16 +200,18 @@ export default function PrincipalDashboard() {
           getDoc(doc(db, 'colleges', collegeId)),
           getDocs(query(collection(db, 'users'), where('collegeId', '==', collegeId), where('role', '==', 'teacher'))),
           getDocs(query(collection(db, 'users'), where('collegeId', '==', collegeId), where('role', '==', 'student'))),
+          getDocs(query(collection(db, 'classes'), where('collegeId', '==', collegeId))),
           getDocs(query(collection(db, 'tests'), where('collegeId', '==', collegeId))),
           getDocs(query(collection(db, 'submissions'), where('collegeId', '==', collegeId)))
         ];
 
-        const [cRes, teachersRes, studentsRes, testsRes, subRes] = await Promise.allSettled(queries);
+        const [cRes, teachersRes, studentsRes, classesRes, testsRes, subRes] = await Promise.allSettled(queries);
         if (cRes.status !== 'fulfilled') throw cRes.reason;
 
         const cSnap = cRes.value as any;
         const teachersSnap = (teachersRes.status === 'fulfilled' ? teachersRes.value : { docs: [] }) as any;
         const studentsSnap = (studentsRes.status === 'fulfilled' ? studentsRes.value : { docs: [] }) as any;
+        const classesSnap = (classesRes.status === 'fulfilled' ? classesRes.value : { docs: [] }) as any;
         const testsSnap = (testsRes.status === 'fulfilled' ? testsRes.value : { docs: [] }) as any;
         const allSubSnap = (subRes.status === 'fulfilled' ? subRes.value : { docs: [] }) as any;
         
@@ -221,11 +222,18 @@ export default function PrincipalDashboard() {
         // 1. Teachers
         const teacherList = teachersSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
         setTeachers(teacherList);
+        const classList = classesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+        setClasses(classList);
+        if (!selectedClassId && classList.length) {
+          setSelectedClassId(classList[0].id);
+        }
         
         // 2. Students
-        const studentList = studentsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
-        studentList.sort((a: any, b: any) => String(a.rollNo || '').localeCompare(String(b.rollNo || ''), undefined, { numeric: true, sensitivity: 'base' }));
-        setStudents(studentList);
+        const studentList = studentsSnap.docs
+          .map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+        const scopedStudents = selectedClass ? studentList.filter((student: any) => student.classId === selectedClass) : studentList;
+        scopedStudents.sort((a: any, b: any) => String(a.rollNo || '').localeCompare(String(b.rollNo || ''), undefined, { numeric: true, sensitivity: 'base' }));
+        setStudents(scopedStudents);
 
         // 3. Tests
         const teacherIdentityMap = new Map<string, string[]>();
@@ -255,27 +263,29 @@ export default function PrincipalDashboard() {
             : []
         ) as any[];
 
-        const testList = dedupeById(
+        const allTests = dedupeById(
           [...collegeTests, ...teacherScopedTests].filter((test: any) => {
             if (test.collegeId === collegeId) return true;
             if (test.collegeId) return false;
             return Array.from(teacherIdentityMap.values()).some((ids) => ids.includes(test.teacherId));
           })
         );
+        const testList = selectedClass ? allTests.filter((test: any) => test.classId === selectedClass) : allTests;
 
         // 4. Submissions (Recent)
         const allSubs = allSubSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
-        const sortedSubs = [...allSubs].sort((a: any, b: any) => (b.submittedAt?.seconds || 0) - (a.submittedAt?.seconds || 0));
+        const scopedSubs = allSubs.filter((submission: any) => testList.some((test: any) => test.id === submission.testId));
+        const sortedSubs = [...scopedSubs].sort((a: any, b: any) => (b.submittedAt?.seconds || 0) - (a.submittedAt?.seconds || 0));
         setRecentSubmissions(sortedSubs.slice(0, 10)); // Top 10 for display
 
         // Insights Logic
-        const passCount = allSubs.filter((d: any) => d.status === 'PASS').length;
+        const passCount = scopedSubs.filter((d: any) => d.status === 'PASS').length;
         
         const metrics: Record<string, any> = {};
         teacherList.forEach(t => {
           const teacherIds = teacherIdentityMap.get(t.id) || [t.id];
           const tTests = testList.filter((test: any) => teacherIds.includes(test.teacherId));
-          const tSubs = allSubs.filter((s: any) => tTests.some(test => test.id === s.testId));
+          const tSubs = scopedSubs.filter((s: any) => tTests.some(test => test.id === s.testId));
           metrics[t.id] = {
             testCount: tTests.length,
             subCount: tSubs.length,
@@ -284,7 +294,7 @@ export default function PrincipalDashboard() {
         });
         setTeacherMetrics(metrics);
 
-        await fetchAttendanceRegister(collegeId, attendanceDate, studentList);
+        await fetchAttendanceRegister(collegeId, attendanceDate, scopedStudents);
 
         const testRows = testList.map((test: any) => {
           const relatedSubs = allSubs.filter((submission: any) => submission.testId === test.id);
@@ -316,10 +326,10 @@ export default function PrincipalDashboard() {
 
         setStats({
           totalTeachers: teachersSnap.size,
-          totalStudents: studentsSnap.size,
+          totalStudents: scopedStudents.length,
           totalTests: testList.length,
-          overallPassRate: allSubs.length ? Math.round((passCount / allSubs.length) * 100) : 0,
-          totalSubmissions: allSubs.length
+          overallPassRate: scopedSubs.length ? Math.round((passCount / scopedSubs.length) * 100) : 0,
+          totalSubmissions: scopedSubs.length
         });
       }
     } catch (e) {
@@ -476,9 +486,11 @@ export default function PrincipalDashboard() {
        await addDoc(collection(db, 'classes'), {
          name: newClass.name,
          teacherId: newClass.teacherId,
-         collegeId: collegeData.id,
-         createdAt: serverTimestamp()
-       });
+         teacherEmail: teachers.find((teacher: any) => teacher.id === newClass.teacherId)?.email || '',
+         teacherUid: teachers.find((teacher: any) => teacher.id === newClass.teacherId)?.uid || '',
+          collegeId: collegeData.id,
+          createdAt: serverTimestamp()
+        });
        setShowClassModal(false);
        setNewClass({ name: '', teacherId: '' });
        fetchDashboardData();
@@ -516,12 +528,11 @@ export default function PrincipalDashboard() {
           </div>
 
           <div className="hidden md:flex items-center gap-2">
-            {[
-              { id: 'dashboard' as const, label: 'Analytics', icon: BarChart3 },
-              { id: 'bank' as const, label: 'Question Bank', icon: BookOpen },
-              { id: 'tests' as const, label: 'Test Management', icon: ShieldCheck },
-              { id: 'reports' as const, label: 'Report Sheets', icon: TrendingUp },
-            ].map(tab => (
+              {[
+                { id: 'dashboard' as const, label: 'Analytics', icon: BarChart3 },
+                { id: 'tests' as const, label: 'Test Management', icon: ShieldCheck },
+                { id: 'reports' as const, label: 'Report Sheets', icon: TrendingUp },
+              ].map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
@@ -956,12 +967,31 @@ export default function PrincipalDashboard() {
       </>
     )}
 
-        {activeTab === 'bank' && <QuestionBank collegeIdOverride={profile?.collegeId} mode="principal" />}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6">
+          <div>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Class Lens</p>
+            <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight italic">
+              {classes.find((classRoom: any) => classRoom.id === selectedClassId)?.name || 'All Classes'}
+            </h3>
+          </div>
+          <select
+            value={selectedClassId}
+            onChange={(e) => setSelectedClassId(e.target.value)}
+            className="w-full lg:w-80 p-4 bg-white border border-slate-200 rounded-2xl outline-none font-bold text-slate-700"
+          >
+            <option value="">All Classes</option>
+            {classes.map((classRoom: any) => (
+              <option key={classRoom.id} value={classRoom.id}>{classRoom.name}</option>
+            ))}
+          </select>
+        </div>
+
         {activeTab === 'tests' && (
           <TestCreator
             collegeIdOverride={profile?.collegeId}
             viewerMode="college"
             teacherIdsOverride={teacherScopeIds}
+            classIdOverride={selectedClassId}
           />
         )}
         {activeTab === 'reports' && (
@@ -969,6 +999,7 @@ export default function PrincipalDashboard() {
             collegeIdOverride={profile?.collegeId}
             scopeMode="college"
             teacherIdsOverride={teacherScopeIds}
+            classIdOverride={selectedClassId}
           />
         )}
       </main>
